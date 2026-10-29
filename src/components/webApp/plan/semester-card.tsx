@@ -1,140 +1,86 @@
-import {
-  PlanStatusIcon,
-  PlanStatusPill,
-} from "@/components/webApp/plan/plan-status";
-import { COURSE_CATEGORIES } from "@/mock/academic/course-catalog";
+import { Sparkles } from "lucide-react";
+
+import { PlanCourseTile } from "@/components/webApp/plan/plan-course-tile";
+import { PLAN_STATUS_FILL } from "@/components/webApp/plan/plan-status-fill";
 import type { PlanSemester } from "@/lib/academic/plan";
 import { cn } from "@/lib/utils";
 
 const CONTAINER: Record<PlanSemester["status"], string> = {
-  completed: "border-border bg-card",
-  current: "border-primary/40 bg-card ring-3 ring-primary/10",
-  planned: "border-highlight/70 bg-card",
-  remaining: "border-dashed border-muted-foreground/35 bg-card/60",
+  completed: "border-border bg-muted/30",
+  current: "border-primary/40 bg-muted/30 ring-3 ring-primary/10",
+  planned: "border-highlight/70 bg-highlight/4",
+  remaining: "border-dashed border-muted-foreground/35 bg-transparent",
 };
 
+/** One semester on the plan timeline: a term rail on the left, its courses on the right. */
 export function SemesterCard({ semester }: { semester: PlanSemester }) {
-  const headingId = `semester-${semester.id}`;
+  const headingId = `semester-${semester.id}-title`;
+  const [season, year = ""] = semester.label.split(" ");
 
   return (
     <section
+      id={`semester-${semester.id}`}
+      tabIndex={-1}
       aria-labelledby={headingId}
-      className={cn(
-        "min-w-0 overflow-hidden rounded-lg border",
-        CONTAINER[semester.status],
-      )}
+      className="relative grid gap-3 outline-none lg:grid-cols-[8.5rem_minmax(0,1fr)] lg:gap-6"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3 px-4 pt-4 sm:px-5">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h3
-              id={headingId}
-              className="font-display text-xl tracking-tight text-foreground"
-            >
-              {semester.label}
-            </h3>
-            <PlanStatusPill status={semester.status} />
-          </div>
-          {semester.rationale ? (
-            <p className="mt-1.5 max-w-xl text-xs leading-relaxed text-muted-foreground">
-              {semester.rationale}
-            </p>
-          ) : null}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "absolute top-4.5 -left-7.25 hidden size-2.75 rounded-full ring-4 ring-background sm:block",
+          PLAN_STATUS_FILL[semester.status],
+        )}
+      />
+
+      <div className="flex items-end justify-between gap-3 lg:flex-col lg:items-start lg:justify-start lg:pt-2">
+        <h3 id={headingId}>
+          <span className="block font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+            {season}
+          </span>
+          <span className="block font-display text-3xl leading-none tracking-tight text-foreground font-tabular">
+            {year}
+          </span>
+        </h3>
+        <div className="flex items-center gap-3 lg:flex-col lg:items-start lg:gap-2">
+          <p className="text-xs text-muted-foreground">
+            <span className="font-mono text-foreground font-tabular">
+              {semester.credits}
+            </span>{" "}
+            credits · {semester.courses.length} courses
+          </p>
         </div>
-        <p className="text-right text-xs text-muted-foreground">
-          <span className="font-mono text-lg text-foreground font-tabular">
-            {semester.credits}
-          </span>{" "}
-          credits
-        </p>
       </div>
 
-      <table className="mt-3 w-full text-left text-sm">
-        <caption className="sr-only">
-          {semester.label} courses, {semester.credits} credits
-        </caption>
-        <thead>
-          <tr className="border-y border-border text-[11px] tracking-wide text-muted-foreground uppercase">
-            <th scope="col" className="py-2 pr-3 pl-4 font-medium sm:pl-5">
-              Course
-            </th>
-            <th
-              scope="col"
-              className="hidden px-3 py-2 font-medium md:table-cell"
-            >
-              Prerequisites
-            </th>
-            <th
-              scope="col"
-              className="hidden px-3 py-2 font-medium lg:table-cell"
-            >
-              Requirement
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-medium">
-              Cr
-            </th>
-            <th
-              scope="col"
-              className="py-2 pr-4 pl-3 text-right font-medium sm:pr-5"
-            >
-              {semester.status === "completed" ? "Grade" : "Status"}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
+      <div
+        className={cn(
+          "min-w-0 rounded-lg border p-3 sm:p-4",
+          CONTAINER[semester.status],
+        )}
+      >
+        {semester.rationale ? (
+          <div className="mb-3 flex gap-2.5 rounded-md bg-card px-3 py-2.5 shadow-[0_1px_2px_rgb(0_0_0/0.04)] ring-1 ring-border">
+            <Sparkles
+              aria-hidden="true"
+              className="mt-0.5 size-3.5 shrink-0 text-primary"
+            />
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">
+                Why this semester.
+              </span>{" "}
+              {semester.rationale}
+            </p>
+          </div>
+        ) : null}
+
+        <ul
+          aria-label={`${semester.label} courses`}
+          className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3"
+        >
           {semester.courses.map((course) => (
-            <tr
-              key={course.code}
-              className="border-b border-border/70 last:border-b-0"
-            >
-              <td className="py-2.5 pr-3 pl-4 sm:pl-5">
-                <div className="flex items-start gap-2.5">
-                  <PlanStatusIcon status={course.status} className="mt-0.5" />
-                  <div className="min-w-0">
-                    <p className="font-mono text-[11px] text-muted-foreground">
-                      {course.code}
-                    </p>
-                    <p className="text-[13px] text-foreground">
-                      {course.title}
-                    </p>
-                    {course.prerequisites.length > 0 ? (
-                      <p className="mt-0.5 text-[11px] text-muted-foreground md:hidden">
-                        Requires {course.prerequisites.join(", ")}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              </td>
-              <td className="hidden px-3 py-2.5 font-mono text-[11px] text-muted-foreground md:table-cell">
-                {course.prerequisites.length > 0
-                  ? course.prerequisites.join(", ")
-                  : "—"}
-              </td>
-              <td className="hidden px-3 py-2.5 text-xs text-muted-foreground lg:table-cell">
-                {COURSE_CATEGORIES[course.category].label}
-              </td>
-              <td className="px-3 py-2.5 text-right font-mono text-xs text-foreground font-tabular">
-                {course.credits}
-              </td>
-              <td className="py-2.5 pr-4 pl-3 text-right sm:pr-5">
-                {course.grade ? (
-                  <span className="font-mono text-sm text-foreground">
-                    {course.grade}
-                  </span>
-                ) : (
-                  <span className="sr-only sm:not-sr-only sm:text-xs sm:text-muted-foreground">
-                    {course.status === "current"
-                      ? "Enrolled"
-                      : course.status === "planned"
-                        ? "Planned"
-                        : "Remaining"}
-                  </span>
-                )}
-              </td>
-            </tr>
+            <PlanCourseTile key={course.code} course={course} />
           ))}
-        </tbody>
-      </table>
+        </ul>
+      </div>
     </section>
   );
 }
