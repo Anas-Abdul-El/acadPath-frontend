@@ -27,22 +27,21 @@ export function useUploadForm(queue: UploadQueue, emptyMessage: string) {
 
   const { errors } = formState;
   const fileCount = queue.items.length;
-  const busy = queue.isSimulating;
 
   useEffect(() => {
     setValue("files", queue.items);
   }, [queue.items, setValue]);
 
-  // A stale message ("add a file", "wait for files") goes away once the student acts on it;
+  // A stale message ("add a file") goes away once the student acts on it;
   // the next Continue re-runs the full schema.
   useEffect(() => {
     clearErrors("files");
-  }, [fileCount, busy, clearErrors]);
+  }, [fileCount, clearErrors]);
 
   const error = errors.files?.message ?? errors.files?.root?.message;
 
   /** Returns a submit handler that runs `onValid` only when the Zod schema passes. */
-  const submit = (onValid: () => void) => handleSubmit(() => onValid());
+  const submit = (onValid: () => void | Promise<void>) => handleSubmit(() => onValid());
 
   return { error, submit };
 }

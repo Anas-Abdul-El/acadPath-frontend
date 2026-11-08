@@ -1,14 +1,10 @@
 import { Check, Minus } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
+import { useCurrentUser } from "@/api/me";
 import { onboardingSteps, type OnboardingStepId } from "@/data/onboarding";
-import {
-  selectTranscriptRequired,
-  selectUniversityDocsSubmitted,
-} from "@/store/slices/onboarding/onboarding-slice";
 import { ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
-import { useAppSelector } from "@/store/hooks";
 
 type StepState = "complete" | "current" | "upcoming" | "skipped";
 
@@ -36,8 +32,11 @@ const STATE_LABEL: Record<StepState, string> = {
 
 export function StepIndicator() {
   const { pathname } = useLocation();
-  const universityDocsSubmitted = useAppSelector(selectUniversityDocsSubmitted);
-  const transcriptRequired = useAppSelector(selectTranscriptRequired);
+  const { onboarding } = useCurrentUser();
+  const universityDocsSubmitted = Boolean(
+    onboarding?.universityDocumentsUploaded,
+  );
+  const transcriptRequired = onboarding?.transcriptRequired ?? true;
   const current = STEP_BY_PATH[pathname] ?? "university";
   const currentIndex = ORDER.indexOf(current);
 

@@ -1,70 +1,92 @@
-import { ArrowLeft, ArrowRight, CircleCheck, ListChecks } from "lucide-react";
-import { Link, Navigate } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-
-import { academicYearLabel } from "@/data/academic-years";
-import { useUploadQueue } from "@/hooks/use-upload-queue";
-import { formatBytes, pluralize } from "@/lib/files/format";
+import { useState } from "react";
 import {
-  selectAcademicYear,
-  selectAccount,
-  selectCatalog,
-  selectTranscriptRequired,
-  selectTranscriptSubmitted,
-  selectUniversity,
-  selectUniversityDocsSubmitted,
-} from "@/store/slices/onboarding/onboarding-slice";
+  ArrowLeft,
+  ArrowRight,
+  CircleCheck,
+  ListChecks,
+  Loader2,
+} from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+
+import { errorMessage } from "@/api/errors";
+import {
+  useCompleteOnboarding,
+  useCurrentUser,
+  useDocuments,
+  useUniversitySources,
+} from "@/api/me";
+import { FormAlert } from "@/components/shared/form-alert";
+import { Button } from "@/components/ui/button";
+import { academicYearLabel } from "@/data/academic-years";
+import { formatBytes, pluralize } from "@/lib/files/format";
+import { majorLabel } from "@/lib/labels";
 import { ROUTES } from "@/lib/routes";
-import { useAppSelector } from "@/store/hooks";
 
 export function CompletePage() {
-  const account = useAppSelector(selectAccount);
-  const university = useAppSelector(selectUniversity);
-  const catalog = useAppSelector(selectCatalog);
-  const universityDocsSubmitted = useAppSelector(selectUniversityDocsSubmitted);
-  const transcriptSubmitted = useAppSelector(selectTranscriptSubmitted);
-  const academicYear = useAppSelector(selectAcademicYear);
-  const transcriptRequired = useAppSelector(selectTranscriptRequired);
-  const universityDocuments = useUploadQueue("universityDocuments");
-  const transcriptFiles = useUploadQueue("transcript");
+  const navigate = useNavigate();
+  const { user, profile, onboarding } = useCurrentUser();
+  const complete = useCompleteOnboarding();
+  const [completeError, setCompleteError] = useState<string | null>(null);
+  const transcriptRequired = Boolean(onboarding?.transcriptRequired);
+  const uploadedSources = Boolean(onboarding?.universityDocumentsUploaded);
+  const documents = useDocuments("TRANSCRIPT");
+  const sources = useUniversitySources(uploadedSources);
 
-  if (!university || !account)
-    return <Navigate to={ROUTES.onboarding.university} replace />;
-  if (catalog?.status !== "available" && !universityDocsSubmitted)
-    return <Navigate to={ROUTES.onboarding.universityDocuments} replace />;
-  if (!transcriptSubmitted || !academicYear)
-    return <Navigate to={ROUTES.onboarding.transcript} replace />;
+  // The route guard only opens this step once every earlier one is done.
+  const university = profile?.university;
+  const academicYear = profile?.yearOfStudy;
+  if (!university || !academicYear) return null;
 
   const back = {
     to: ROUTES.onboarding.transcript,
     label: transcriptRequired ? "Edit year & transcript" : "Edit year of study",
   };
 
-  const firstName = account.name.split(/\s+/)[0];
-  const universityDocsSummary =
-    universityDocuments.items.length > 0
-      ? `${pluralize(universityDocuments.items.length, "document")} added (${formatBytes(universityDocuments.totalSize)})`
-      : catalog?.status === "available"
-        ? `Public catalog — ${catalog.title}`
-        : "Not provided";
+  const firstName = user.name.split(/\s+/)[0];
+  const transcripts = documents.data ?? [];
+  const transcriptSize = transcripts.reduce(
+    (sum, doc) => sum + doc.fileSize,
+    0,
+  );
+
+  const universityDocsSummary = uploadedSources
+    ? sources.data
+      ? `${pluralize(sources.data.length, "source")} on file`
+      : "Uploaded"
+    : "Not needed — we already had your catalog";
 
   const summary = [
     {
       term: "University",
       detail: `${university.name} · ${university.city}, ${university.country}`,
     },
+    ...(profile?.major
+      ? [{ term: "Major", detail: majorLabel(profile.major) }]
+      : []),
     { term: "Year", detail: academicYearLabel(academicYear) },
     { term: "University documents", detail: universityDocsSummary },
     {
       term: "Academic transcript",
-      detail: transcriptRequired
-        ? `${pluralize(transcriptFiles.items.length, "file")} added (${formatBytes(transcriptFiles.totalSize)})`
-        : "Not needed — no completed courses yet",
+      detail: !transcriptRequired
+        ? "Not needed — no completed courses yet"
+        : documents.isPending
+          ? "Loading…"
+          : `${pluralize(transcripts.length, "file")} processed (${formatBytes(transcriptSize)})`,
     },
     ...(transcriptRequired
       ? []
       : [{ term: "Starting GPA", detail: "0.00 · 0 credits earned" }]),
   ];
+
+  const goToDashboard = async () => {
+    setCompleteError(null);
+    try {
+      await complete.mutateAsync();
+      navigate(ROUTES.app.overview);
+    } catch (err) {
+      setCompleteError(errorMessage(err));
+    }
+  };
 
   return (
     <>
@@ -80,8 +102,8 @@ export function CompletePage() {
           You're all set, {firstName}.
         </h1>
         <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">
-          You've finished every onboarding step. Here's what you gave us to work
-          with.
+          You&rsquo;ve finished every onboarding step. Here&rsquo;s what
+          AcadPath is working with.
         </p>
 
         <dl className="mt-8 divide-y divide-border rounded-xl border border-border bg-card">
@@ -113,15 +135,14 @@ export function CompletePage() {
           </div>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             {transcriptRequired
-              ? "AcadPath will read your documents and show the courses, grades, credits, and remaining requirements it finds. You'll confirm or correct each item before your plan is built."
-              : "Since this is your first term, your plan starts from the beginning of your degree. AcadPath will lay out your degree requirements so you can confirm them before your first semester is planned."}
-          </p>
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground">Prototype:</span>{" "}
-            document processing isn't connected yet, so your files haven't been
-            uploaded or analyzed.
+              ? "Your dashboard shows the courses, grades, and credits we extracted from your transcript. From there, generate a semester-by-semester plan through graduation."
+              : "Since this is your first term, your plan starts from the beginning of your degree. Generate it from your dashboard to see every semester through graduation."}
           </p>
         </section>
+
+        {completeError ? (
+          <FormAlert message={completeError} className="mt-6" />
+        ) : null}
 
         <div className="mt-8 flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
           <Button
@@ -135,11 +156,22 @@ export function CompletePage() {
               {back.label}
             </Link>
           </Button>
-          <Button asChild size="xl">
-            <Link to={ROUTES.app.overview}>
-              Go to your dashboard
-              <ArrowRight data-icon="inline-end" />
-            </Link>
+          <Button
+            size="xl"
+            onClick={goToDashboard}
+            disabled={complete.isPending}
+          >
+            {complete.isPending ? (
+              <>
+                <Loader2 className="animate-spin" aria-hidden="true" />
+                Opening your dashboard…
+              </>
+            ) : (
+              <>
+                Go to your dashboard
+                <ArrowRight data-icon="inline-end" />
+              </>
+            )}
           </Button>
         </div>
       </div>

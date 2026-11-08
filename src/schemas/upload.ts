@@ -24,15 +24,12 @@ export function createFileSchema(config: UploadConfig) {
     });
 }
 
-/** Validates a whole submission: at least one file, within limits, none still transferring. */
+/** Validates a whole submission: at least one file, within the count and size limits. */
 export function createUploadFormSchema(
   config: UploadConfig,
   emptyMessage: string,
 ) {
-  const item = z.object({
-    file: createFileSchema(config),
-    status: z.enum(["simulating", "ready"]),
-  });
+  const item = z.object({ file: createFileSchema(config) });
 
   return z.object({
     files: z
@@ -44,10 +41,6 @@ export function createUploadFormSchema(
           items.reduce((sum, { file }) => sum + file.size, 0) <=
           config.maxTotalSize,
         `Keep the total under ${formatBytes(config.maxTotalSize)}. Remove a file to continue.`,
-      )
-      .refine(
-        (items) => items.every((entry) => entry.status === "ready"),
-        "Wait for every file to finish before continuing.",
       ),
   });
 }

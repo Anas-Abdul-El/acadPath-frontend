@@ -35,12 +35,14 @@ type MultiFileUploaderProps = {
   /** Submission-level error, e.g. "Add at least one file". */
   error?: string;
   errorId?: string;
+  /** True while the selection is being uploaded: the list is locked. */
+  disabled?: boolean;
 };
 
 /**
  * Drag-and-drop + picker for multiple PDFs and images. Files are validated against the
- * queue's config, listed with previews, and can be removed individually. Nothing is sent
- * to a server — progress is simulated by the uploads slice.
+ * queue's config, listed with previews, and can be removed individually. The step sends
+ * them when it's submitted.
  */
 export function MultiFileUploader({
   queue,
@@ -48,6 +50,7 @@ export function MultiFileUploader({
   hint,
   error,
   errorId,
+  disabled = false,
 }: MultiFileUploaderProps) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -60,9 +63,10 @@ export function MultiFileUploader({
   const { config, items, rejected, totalSize } = queue;
   const hasFiles = items.length > 0;
   const full = items.length >= config.maxFiles;
+  const locked = full || disabled;
 
   const add = (files: File[]) => {
-    if (files.length === 0) return;
+    if (files.length === 0 || disabled) return;
     const { accepted, rejected: invalid } = validateFiles(
       files,
       items.map((item) => item.file),
@@ -142,7 +146,7 @@ export function MultiFileUploader({
       />
 
       <div
-        onClick={full ? undefined : openPicker}
+        onClick={locked ? undefined : openPicker}
         onDragEnter={onDragEnter}
         onDragOver={(event) => {
           if (event.dataTransfer.types.includes("Files"))
@@ -158,7 +162,7 @@ export function MultiFileUploader({
             : error
               ? "border-destructive/60 bg-card"
               : "border-input bg-card hover:border-primary/50",
-          full ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+          locked ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         )}
       >
         <div
@@ -216,6 +220,7 @@ export function MultiFileUploader({
               variant="outline"
               size="xl"
               className="mt-1 bg-background"
+              disabled={disabled}
             >
               Choose files
             </Button>
@@ -289,7 +294,7 @@ export function MultiFileUploader({
               size="lg"
               className="bg-background"
               onClick={openPicker}
-              disabled={full}
+              disabled={locked}
             >
               <Plus data-icon="inline-start" aria-hidden="true" />
               Add more files
@@ -297,7 +302,12 @@ export function MultiFileUploader({
           </div>
           <ul className="divide-y divide-border">
             {items.map((item) => (
-              <FileRow key={item.id} item={item} onRemove={remove} />
+              <FileRow
+                key={item.id}
+                item={item}
+                onRemove={remove}
+                disabled={disabled}
+              />
             ))}
           </ul>
         </section>

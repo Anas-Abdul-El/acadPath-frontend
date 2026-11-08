@@ -16,7 +16,7 @@ export type UploadQueue = ReturnType<typeof useUploadQueue>
 
 /**
  * One multi-file selection from the store, plus the actions that change it. The files live in
- * Redux so they survive moving between onboarding steps; progress is simulated by the slice.
+ * Redux so they survive moving between onboarding steps until the step uploads them.
  */
 export function useUploadQueue(id: UploadQueueId, config: UploadConfig = DOCUMENT_UPLOAD_CONFIG) {
   const dispatch = useAppDispatch()
@@ -30,8 +30,6 @@ export function useUploadQueue(id: UploadQueueId, config: UploadConfig = DOCUMEN
   const clearRejected = useCallback(() => dispatch(rejectedCleared(id)), [dispatch, id])
   const reset = useCallback(() => dispatch(queueReset(id)), [dispatch, id])
 
-  const isSimulating = items.some((item) => item.status === "simulating")
-
   const totalSize = useMemo(() => items.reduce((sum, item) => sum + item.file.size, 0), [items])
 
   return {
@@ -39,7 +37,6 @@ export function useUploadQueue(id: UploadQueueId, config: UploadConfig = DOCUMEN
     items,
     rejected,
     totalSize,
-    isSimulating,
     addValidated,
     removeFile,
     clearRejected,

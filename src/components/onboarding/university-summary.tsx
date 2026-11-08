@@ -1,11 +1,11 @@
 import { Building2 } from "lucide-react"
 import { Link } from "react-router-dom"
 
-import type { UniversitySelection } from "@/simulation/onboarding/university-catalog"
+import type { UniversityDto } from "@/api/types"
 import { ROUTES } from "@/lib/routes"
 
 /** Reminds the student which university the current step is for, with a way back to change it. */
-export function UniversitySummary({ university }: { university: UniversitySelection }) {
+export function UniversitySummary({ university }: { university: Pick<UniversityDto, "name" | "city" | "country"> }) {
   return (
     <div className="inline-flex max-w-full items-center gap-3 rounded-lg border border-border bg-card py-2 pr-3 pl-2.5 text-sm">
       <Building2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
