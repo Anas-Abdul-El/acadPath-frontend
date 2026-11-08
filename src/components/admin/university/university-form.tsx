@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 
@@ -5,20 +6,28 @@ import { FormDialogFooter } from "@/components/admin/form-dialog"
 import { FormField } from "@/components/shared/form-field"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { AdminUniversity } from "@/mock/admin/universities"
+import { useSaveUniversity } from "@/api/admin"
+import { applyFieldErrors, errorMessage, isApiError } from "@/api/errors"
+import type { AdminUniversityDto } from "@/api/types"
+import { FormAlert } from "@/components/shared/form-alert"
 import { adminUniversitySchema, type AdminUniversityValues } from "@/schemas/admin"
 
+const FIELDS = ["name", "shortName", "country", "city", "website", "catalogYear"] as const
+
 type UniversityFormProps = {
-  university?: AdminUniversity
-  onSubmit: (values: AdminUniversityValues) => void
+  university?: AdminUniversityDto
+  onSaved: (university: AdminUniversityDto) => void
   onCancel: () => void
 }
 
-export function UniversityForm({ university, onSubmit, onCancel }: UniversityFormProps) {
+export function UniversityForm({ university, onSaved, onCancel }: UniversityFormProps) {
+  const save = useSaveUniversity()
+  const [formError, setFormError] = useState<string | null>(null)
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    setError,
+    formState: { errors, isSubmitting },
   } = useForm<AdminUniversityValues>({
     resolver: zodResolver(adminUniversitySchema),
     mode: "onTouched",
@@ -32,9 +41,22 @@ export function UniversityForm({ university, onSubmit, onCancel }: UniversityFor
     },
   })
 
+  const onSubmit = async (values: AdminUniversityValues) => {
+    setFormError(null)
+    try {
+      // Empty optional fields are sent as "" and stored as null by the API.
+      const saved = await save.mutateAsync({ id: university?.id, body: values })
+      onSaved(saved)
+    } catch (err) {
+      if (isApiError(err, 409)) setError("name", { type: "server", message: err.message })
+      else if (!applyFieldErrors(err, setError, FIELDS)) setFormError(errorMessage(err))
+    }
+  }
+
   return (
     <form noValidate onSubmit={handleSubmit(onSubmit)}>
       <div className="space-y-4 px-5 py-5">
+        {formError ? <FormAlert message={formError} /> : null}
         <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
           <FormField label="University name" error={errors.name?.message}>
             {(control) => <Input {...control} {...register("name")} className="h-10" autoComplete="off" />}
@@ -66,8 +88,8 @@ export function UniversityForm({ university, onSubmit, onCancel }: UniversityFor
         <Button type="button" variant="outline" size="lg" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" size="lg">
-          {university ? "Save changes" : "Add university"}
+        <Button type="submit" size="lg" disabled={isSubmitting}>
+          {isSubmitting ? "Saving…" : university ? "Save changes" : "Add university"}
         </Button>
       </FormDialogFooter>
     </form>

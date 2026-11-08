@@ -18,6 +18,15 @@ export type Column<T> = {
   className?: string
 }
 
+/** Server-side paging: rows are already one page, and the API reports the total. */
+export type ServerPagination = {
+  /** 1-based, as the API counts. */
+  page: number
+  pageSize: number
+  total: number
+  onPageChange: (page: number) => void
+}
+
 type DataTableProps<T> = {
   rows: T[]
   columns: Column<T>[]
@@ -28,11 +37,18 @@ type DataTableProps<T> = {
   actions?: (row: T) => ReactNode
   empty: ReactNode
   pageSize?: number
+  /**
+   * When set, paging is done by the server. Sorting is off in this mode: the API has no sort
+   * parameter, and sorting one page would misrepresent the whole list.
+   */
+  pagination?: ServerPagination
+  /** Dims the rows while a new page or filter loads. */
+  busy?: boolean
 }
 
 const HIDE = { sm: "hidden sm:table-cell", md: "hidden md:table-cell", lg: "hidden lg:table-cell" }
 
-/** Sortable, paginated table shared by every admin list. */
+/** Paginated table shared by every admin list: sortable on the client, or paged by the server. */
 export function DataTable<T>({
   rows,
   columns,
@@ -41,12 +57,14 @@ export function DataTable<T>({
   initialSort,
   actions,
   empty,
-  pageSize = 10,
+  pageSize: clientPageSize = 10,
+  pagination,
+  busy = false,
 }: DataTableProps<T>) {
-  const [sort, setSort] = useState(initialSort)
+  const [sort, setSort] = useState(pagination ? undefined : initialSort)
   const [pageState, setPage] = useState(0)
 
-  const sortColumn = columns.find((column) => column.id === sort?.id)
+  const sortColumn = pagination ? undefined : columns.find((column) => column.id === sort?.id)
   const sorted =
     sortColumn?.sortValue && sort
       ? [...rows].sort((a, b) => {
@@ -57,9 +75,13 @@ export function DataTable<T>({
         })
       : rows
 
-  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize))
-  const page = Math.min(pageState, pageCount - 1)
-  const visible = sorted.slice(page * pageSize, page * pageSize + pageSize)
+  const pageSize = pagination?.pageSize ?? clientPageSize
+  const total = pagination?.total ?? sorted.length
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  // 0-based from here on.
+  const page = pagination ? Math.min(pagination.page - 1, pageCount - 1) : Math.min(pageState, pageCount - 1)
+  const visible = pagination ? rows : sorted.slice(page * pageSize, page * pageSize + pageSize)
+  const goTo = (next: number) => (pagination ? pagination.onPageChange(next + 1) : setPage(next))
 
   const toggleSort = (id: string) => {
     setSort((current) =>
@@ -91,7 +113,7 @@ export function DataTable<T>({
                       column.align === "right" && "text-right",
                     )}
                   >
-                    {column.sortValue ? (
+                    {column.sortValue && !pagination ? (
                       <button
                         type="button"
                         onClick={() => toggleSort(column.id)}
@@ -124,7 +146,7 @@ export function DataTable<T>({
               ) : null}
             </tr>
           </thead>
-          <tbody>
+          <tbody aria-busy={busy} className={cn("transition-opacity", busy && "opacity-50")}>
             {visible.map((row) => (
               <tr key={getRowId(row)} className="border-b border-border/70 transition-colors last:border-b-0 hover:bg-muted/40">
                 {columns.map((column) => (
@@ -150,10 +172,10 @@ export function DataTable<T>({
       {pageCount > 1 ? (
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-2.5 text-xs text-muted-foreground">
           <p>
-            {page * pageSize + 1}–{Math.min(sorted.length, (page + 1) * pageSize)} of {sorted.length}
+            {page * pageSize + 1}–{Math.min(total, (page + 1) * pageSize)} of {total}
           </p>
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon-sm" onClick={() => setPage(page - 1)} disabled={page === 0} aria-label="Previous page">
+            <Button variant="ghost" size="icon-sm" onClick={() => goTo(page - 1)} disabled={page === 0 || busy} aria-label="Previous page">
               <ChevronLeft />
             </Button>
             <span className="px-1 font-tabular">
@@ -162,8 +184,8 @@ export function DataTable<T>({
             <Button
               variant="ghost"
               size="icon-sm"
-              onClick={() => setPage(page + 1)}
-              disabled={page >= pageCount - 1}
+              onClick={() => goTo(page + 1)}
+              disabled={page >= pageCount - 1 || busy}
               aria-label="Next page"
             >
               <ChevronRight />
