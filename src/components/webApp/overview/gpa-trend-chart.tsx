@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react";
 
 import { DashboardCard } from "@/components/shared/dashboard-card";
-import type { TermGpa } from "@/mock/student-preview";
+import type { TermGpa } from "@/types/academic";
 
 const GpaTrendPlot = lazy(
   () => import("@/components/webApp/overview/gpa-trend-plot"),
@@ -13,8 +13,21 @@ type GpaTrendChartProps = {
 };
 
 export function GpaTrendChart({ data, className }: GpaTrendChartProps) {
-  const first = data[0];
-  const latest = data[data.length - 1];
+  const first = data.at(0);
+  const latest = data.at(-1);
+
+  if (!first || !latest)
+    return (
+      <DashboardCard
+        className={className}
+        title="Term GPA"
+        subtitle="No graded semesters yet"
+      >
+        <div className="flex h-48 items-center justify-center rounded-md border border-dashed border-border px-6 text-center text-sm text-muted-foreground sm:h-52">
+          Your GPA trend appears here once your first semester is graded.
+        </div>
+      </DashboardCard>
+    );
 
   return (
     <DashboardCard

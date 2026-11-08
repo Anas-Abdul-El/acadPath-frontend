@@ -10,7 +10,7 @@ import {
   YAxis,
 } from "recharts"
 
-import type { TermGpa } from "@/mock/student-preview"
+import type { TermGpa } from "@/types/academic"
 
 const DEANS_LIST_GPA = 3.5
 

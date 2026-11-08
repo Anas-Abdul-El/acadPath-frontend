@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   ArrowRight,
   CalendarRange,
@@ -7,42 +8,31 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
+import { useAcademicSummary } from "@/api/academics";
+import { useCurrentUser } from "@/api/me";
+import { useStudyPlan } from "@/api/study-plan";
+import type { AcademicSummaryDto, StudyPlanDto } from "@/api/types";
 import { AppPageHeader } from "@/components/shared/page-header";
-import { AdvisorInsight } from "@/components/webApp/overview/advisor-insight";
 import { DashboardCard } from "@/components/shared/dashboard-card";
-import { GpaTrendChart } from "@/components/webApp/overview/gpa-trend-chart";
-import { RequirementProgress } from "@/components/webApp/overview/requirement-progress";
+import { QueryError, Skeleton } from "@/components/shared/query-state";
 import { StatTile } from "@/components/shared/stat-tile";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { catalogInfo } from "@/mock/academic/course-catalog";
+import { AdvisorInsight } from "@/components/webApp/overview/advisor-insight";
+import { GpaTrendChart } from "@/components/webApp/overview/gpa-trend-chart";
+import { RequirementProgress } from "@/components/webApp/overview/requirement-progress";
 import {
-  expectedGraduation,
-  generatedPlan,
-} from "@/mock/academic/semester-plan";
-import {
-  completedTerms,
-  currentTerm,
-  studentProfile,
-} from "@/mock/academic/student-record";
-import { getCourse } from "@/lib/academic/catalog";
-import {
-  creditsCompleted,
-  creditsRequired,
-  cumulativeGpa,
-  currentTermCredits,
-  gpaChangeOverYear,
-  graduationPercent,
-  requirementGroups,
-  termGpaHistory,
-} from "@/lib/academic/record";
-import { selectAccount } from "@/store/slices/onboarding/onboarding-slice";
+  categoryLabel,
+  CATEGORY_ORDER,
+  formatGpa,
+  gradeLabel,
+  graduationLabel,
+  majorLabel,
+  termLabel,
+  termShort,
+} from "@/lib/labels";
 import { ROUTES } from "@/lib/routes";
-import { useAppSelector } from "@/store/hooks";
-
-const termPercent = Math.round((currentTerm.week / currentTerm.weeks) * 100);
-const lastTerm = completedTerms[completedTerms.length - 1];
-const lastTermGpa = termGpaHistory[termGpaHistory.length - 1];
+import type { RequirementGroup, TermGpa } from "@/types/academic";
 
 function greeting(date = new Date()) {
   const hour = date.getHours();
@@ -53,42 +43,163 @@ function greeting(date = new Date()) {
       : "Good evening";
 }
 
-const quickActions = [
-  {
-    to: ROUTES.app.plan,
-    icon: CalendarRange,
-    label: "Review your semester plan",
-    detail: "Through " + expectedGraduation,
-  },
-  {
-    to: ROUTES.app.whatIf,
-    icon: GitBranch,
-    label: "Test a what-if scenario",
-    detail: "GPA, credits, and timeline",
-  },
-  {
-    to: ROUTES.app.advisor,
-    icon: Sparkles,
-    label: "Ask the AI Advisor",
-    detail: "Courses, GPA, prerequisites",
-  },
-];
+function toTermGpa(history: AcademicSummaryDto["termHistory"]): TermGpa[] {
+  return history.flatMap((entry) =>
+    entry.gpa === null
+      ? []
+      : [
+          {
+            term: termLabel(entry),
+            shortTerm: termShort(entry),
+            gpa: entry.gpa,
+            credits: entry.credits,
+          },
+        ],
+  );
+}
+
+function toRequirementGroups(
+  requirements: AcademicSummaryDto["requirements"],
+): RequirementGroup[] {
+  return [...requirements]
+    .sort(
+      (a, b) =>
+        CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category),
+    )
+    .map((requirement) => ({
+      name: categoryLabel(requirement.category),
+      completed: requirement.completedCredits,
+      required: requirement.plannedCredits,
+    }));
+}
 
 export function OverviewPage() {
-  const account = useAppSelector(selectAccount);
-  const firstName = account?.name.split(/\s+/)[0] ?? studentProfile.firstName;
-  const gpaUp = gpaChangeOverYear >= 0;
+  const { user, profile } = useCurrentUser();
+  const summary = useAcademicSummary();
+  const plan = useStudyPlan();
+  const firstName = user.name.split(/\s+/)[0];
 
   return (
     <div className="space-y-6">
       <title>Overview · AcadPath</title>
+      {summary.data ? (
+        <OverviewContent
+          firstName={firstName}
+          summary={summary.data}
+          plan={plan.data ?? null}
+          catalogYear={profile?.university?.catalogYear ?? null}
+        />
+      ) : summary.error ? (
+        <>
+          <AppPageHeader
+            title={`${greeting()}, ${firstName}`}
+            description="Your academic summary"
+          />
+          <QueryError
+            error={summary.error}
+            onRetry={() => summary.refetch()}
+            title="We couldn't load your academic summary"
+          />
+        </>
+      ) : (
+        <OverviewSkeleton />
+      )}
+    </div>
+  );
+}
+
+function OverviewSkeleton() {
+  return (
+    <div className="space-y-6" role="status" aria-label="Loading your overview">
+      <div className="space-y-3">
+        <Skeleton className="h-10 w-72" />
+        <Skeleton className="h-4 w-96 max-w-full" />
+      </div>
+      <Skeleton className="h-32 w-full rounded-lg" />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Skeleton className="h-72 rounded-lg lg:col-span-2" />
+        <Skeleton className="h-72 rounded-lg" />
+      </div>
+    </div>
+  );
+}
+
+type OverviewContentProps = {
+  firstName: string;
+  summary: AcademicSummaryDto;
+  plan: StudyPlanDto | null;
+  catalogYear: string | null;
+};
+
+function OverviewContent({
+  firstName,
+  summary,
+  plan,
+  catalogYear,
+}: OverviewContentProps) {
+  const { gpa, credits, graduation, currentTerm, lastTerm } = summary;
+  const termGpa = useMemo(
+    () => toTermGpa(summary.termHistory),
+    [summary.termHistory],
+  );
+  const requirementGroups = useMemo(
+    () => toRequirementGroups(summary.requirements),
+    [summary.requirements],
+  );
+
+  const expected = graduation.expected
+    ? graduationLabel(graduation.expected)
+    : null;
+  const gpaChange = gpa.changeSinceLastYear;
+  const gpaUp = (gpaChange ?? 0) >= 0;
+  const lastTermCredits = lastTerm
+    ? (summary.termHistory.find(
+        (entry) => entry.term === lastTerm.term && entry.year === lastTerm.year,
+      )?.credits ??
+      lastTerm.courses.reduce((sum, { course }) => sum + course.credits, 0))
+    : 0;
+
+  const quickActions = [
+    {
+      to: ROUTES.app.plan,
+      icon: CalendarRange,
+      label: plan ? "Review your semester plan" : "Generate your semester plan",
+      detail: expected
+        ? `Through ${expected}`
+        : "Every semester through graduation",
+    },
+    {
+      to: ROUTES.app.whatIf,
+      icon: GitBranch,
+      label: "Test a what-if scenario",
+      detail: "GPA, credits, and timeline",
+    },
+    {
+      to: ROUTES.app.advisor,
+      icon: Sparkles,
+      label: "Ask the AI Advisor",
+      detail: "Courses, GPA, prerequisites",
+    },
+  ];
+
+  const description = [
+    currentTerm ? termLabel(currentTerm) : null,
+    majorLabel(summary.student.major),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <>
       <AppPageHeader
         title={`${greeting()}, ${firstName}`}
-        description={`${currentTerm.label} · Week ${currentTerm.week} of ${currentTerm.weeks} · ${studentProfile.program}`}
+        description={description}
         actions={
           <p className="font-mono text-xs text-muted-foreground">
             Expected graduation ·{" "}
-            <span className="text-foreground">{expectedGraduation}</span>
+            <span className="text-foreground">
+              {expected ?? "Not planned yet"}
+            </span>
           </p>
         }
       />
@@ -99,118 +210,175 @@ export function OverviewPage() {
       >
         <StatTile
           label="Cumulative GPA"
-          value={cumulativeGpa.toFixed(2)}
+          value={formatGpa(gpa.cumulative)}
           footer={
-            <span className="inline-flex items-center gap-1">
-              <TrendingUp
-                aria-hidden="true"
-                className={
-                  gpaUp
-                    ? "size-3.5 text-success"
-                    : "size-3.5 rotate-180 text-destructive"
-                }
-              />
-              {gpaUp ? "+" : ""}
-              {gpaChangeOverYear.toFixed(2)} since last year
-            </span>
+            gpaChange === null ? (
+              gpa.cumulative === null ? (
+                "No graded courses yet"
+              ) : (
+                "Not enough history to compare"
+              )
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <TrendingUp
+                  aria-hidden="true"
+                  className={
+                    gpaUp
+                      ? "size-3.5 text-success"
+                      : "size-3.5 rotate-180 text-destructive"
+                  }
+                />
+                {gpaUp ? "+" : ""}
+                {gpaChange.toFixed(2)} since last year
+              </span>
+            )
           }
         />
         <StatTile
           label="Credits completed"
-          value={creditsCompleted}
-          unit={`/ ${creditsRequired}`}
-          footer={`${creditsRequired - creditsCompleted} credits remaining`}
+          value={credits.completed}
+          unit={credits.required !== null ? `/ ${credits.required}` : undefined}
+          footer={
+            credits.remaining !== null
+              ? `${credits.remaining} credits remaining`
+              : `${credits.inProgress} credits in progress`
+          }
         />
         <StatTile
           label="Current semester"
-          value={<span className="text-[1.75rem]">{currentTerm.label}</span>}
+          value={
+            <span className="text-[1.75rem]">
+              {currentTerm ? termLabel(currentTerm) : "—"}
+            </span>
+          }
           footer={
-            <div className="space-y-1.5">
-              <span>{currentTermCredits} credits enrolled</span>
-              <Progress
-                value={termPercent}
-                aria-label={`Week ${currentTerm.week} of ${currentTerm.weeks}`}
-                className="h-1 bg-secondary"
-              />
-            </div>
+            currentTerm
+              ? `${currentTerm.credits} credits enrolled`
+              : "No courses in progress"
           }
         />
         <StatTile
           label="Graduation progress"
-          value={graduationPercent}
-          unit="%"
+          value={graduation.progressPercent ?? "—"}
+          unit={graduation.progressPercent !== null ? "%" : undefined}
           footer={
             <div className="space-y-1.5">
-              <span>On track for {expectedGraduation}</span>
-              <Progress
-                value={graduationPercent}
-                aria-label={`${graduationPercent}% of degree credits completed`}
-                className="h-1 bg-secondary [&>[data-slot=progress-indicator]]:bg-highlight"
-              />
+              <span>
+                {expected
+                  ? `On track for ${expected}`
+                  : "Generate a plan to estimate"}
+              </span>
+              {graduation.progressPercent !== null ? (
+                <Progress
+                  value={graduation.progressPercent}
+                  aria-label={`${graduation.progressPercent}% of degree credits completed`}
+                  className="h-1 bg-secondary [&>[data-slot=progress-indicator]]:bg-highlight"
+                />
+              ) : null}
             </div>
           }
         />
       </section>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <GpaTrendChart data={termGpaHistory} className="lg:col-span-2" />
+        <GpaTrendChart data={termGpa} className="lg:col-span-2" />
         <RequirementProgress
           groups={requirementGroups}
-          catalogYear={catalogInfo.catalogYear}
+          catalogYear={catalogYear ? `${catalogYear} catalog` : null}
         />
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <AdvisorInsight
-          className="md:col-span-2 lg:col-span-1"
-          title="Stay on track for December 2027"
-          body={
-            generatedPlan.notes[0] +
-            " Taking CS 3410 in Spring 2027 keeps that door open."
-          }
-          footnote={`Based on catalog rules · ${catalogInfo.catalogYear}`}
-          action={
-            <Button asChild variant="inverse" size="lg">
-              <Link to={ROUTES.app.advisor}>
-                Ask a follow-up
-                <ArrowRight data-icon="inline-end" />
-              </Link>
-            </Button>
-          }
-        />
+        {plan ? (
+          <AdvisorInsight
+            className="md:col-span-2 lg:col-span-1"
+            title={
+              plan.expectedGraduation
+                ? `Stay on track for ${graduationLabel(plan.expectedGraduation)}`
+                : "Your plan through graduation"
+            }
+            body={
+              plan.notes[0] ??
+              plan.assumptions[0] ??
+              "Your plan is checked against prerequisites, offered terms, and credit limits."
+            }
+            footnote={`From your study plan · ${new Date(plan.generatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`}
+            action={
+              <Button asChild variant="inverse" size="lg">
+                <Link to={ROUTES.app.advisor}>
+                  Ask a follow-up
+                  <ArrowRight data-icon="inline-end" />
+                </Link>
+              </Button>
+            }
+          />
+        ) : (
+          <AdvisorInsight
+            className="md:col-span-2 lg:col-span-1"
+            title="Map out every semester to graduation"
+            body="Generate a study plan and AcadPath will order your remaining courses around prerequisites, offered terms, and credit limits."
+            footnote="Takes a few seconds"
+            action={
+              <Button asChild variant="inverse" size="lg">
+                <Link to={ROUTES.app.plan}>
+                  Generate my plan
+                  <ArrowRight data-icon="inline-end" />
+                </Link>
+              </Button>
+            }
+          />
+        )}
 
         <DashboardCard
           title="Last semester"
-          subtitle={`${lastTerm.label} · ${lastTermGpa.credits} credits`}
+          subtitle={
+            lastTerm
+              ? `${termLabel(lastTerm)} · ${lastTermCredits} credits`
+              : "No completed semesters yet"
+          }
           action={
-            <p className="text-right text-xs text-muted-foreground">
-              Term GPA
-              <span className="ml-1.5 font-mono text-sm text-foreground font-tabular">
-                {lastTermGpa.gpa.toFixed(2)}
-              </span>
-            </p>
+            lastTerm ? (
+              <p className="text-right text-xs text-muted-foreground">
+                Term GPA
+                <span className="ml-1.5 font-mono text-sm text-foreground font-tabular">
+                  {formatGpa(lastTerm.gpa)}
+                </span>
+              </p>
+            ) : null
           }
         >
-          <ul className="-my-1 divide-y divide-border/70">
-            {lastTerm.courses.map(({ code, grade }) => (
-              <li
-                key={code}
-                className="flex items-center justify-between gap-3 py-2.5"
-              >
-                <div className="min-w-0">
-                  <p className="font-mono text-[11px] text-muted-foreground">
-                    {code}
-                  </p>
-                  <p className="truncate text-[13px] text-foreground">
-                    {getCourse(code).title}
-                  </p>
-                </div>
-                <span className="w-8 text-right font-mono text-sm text-foreground">
-                  {grade}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {lastTerm ? (
+            <ul className="-my-1 divide-y divide-border/70">
+              {lastTerm.courses.map(({ course, grade, status }) => (
+                <li
+                  key={course.id}
+                  className="flex items-center justify-between gap-3 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <p className="font-mono text-[11px] text-muted-foreground">
+                      {course.code}
+                    </p>
+                    <p className="truncate text-[13px] text-foreground">
+                      {course.name}
+                    </p>
+                  </div>
+                  <span
+                    className={
+                      status === "FAILED"
+                        ? "w-8 text-right font-mono text-sm text-destructive"
+                        : "w-8 text-right font-mono text-sm text-foreground"
+                    }
+                  >
+                    {grade ? gradeLabel(grade) : "—"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Grades from your most recent semester show up here.
+            </p>
+          )}
         </DashboardCard>
 
         <DashboardCard
@@ -246,6 +414,6 @@ export function OverviewPage() {
           </ul>
         </DashboardCard>
       </div>
-    </div>
+    </>
   );
 }
