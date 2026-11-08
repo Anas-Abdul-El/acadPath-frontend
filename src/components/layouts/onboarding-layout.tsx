@@ -1,32 +1,19 @@
-import { useState } from "react"
 import { LogOut } from "lucide-react"
-import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { Outlet, useLocation } from "react-router-dom"
 
+import { useCurrentUser } from "@/api/me"
 import { Logo } from "@/components/shared/logo"
 import { Container } from "@/components/shared/container"
 import { StepIndicator } from "@/components/onboarding/step-indicator"
 import { Button } from "@/components/ui/button"
+import { useSignOut } from "@/hooks/use-sign-out"
 import { initialsOf } from "@/lib/initials"
-import { selectAccount, signOut } from "@/store/slices/onboarding/onboarding-slice"
-import { ROUTES } from "@/lib/routes"
-import { useAppDispatch, useAppSelector } from "@/store/hooks"
 
+/** Setup shell with the step indicator. Guarded by `RequireAuth`. */
 export function OnboardingLayout() {
-  const account = useAppSelector(selectAccount)
-  const dispatch = useAppDispatch()
+  const { user: account } = useCurrentUser()
   const location = useLocation()
-  const navigate = useNavigate()
-
-  // Without this flag, clearing the account would trip the guard below and send the student to sign-in.
-  const [signingOut, setSigningOut] = useState(false)
-
-  if (!account) return signingOut ? null : <Navigate to={ROUTES.signIn} replace />
-
-  const handleSignOut = () => {
-    setSigningOut(true)
-    dispatch(signOut())
-    navigate(ROUTES.home)
-  }
+  const handleSignOut = useSignOut()
 
   return (
     <div className="flex min-h-svh flex-col">

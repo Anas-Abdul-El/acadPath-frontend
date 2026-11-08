@@ -1,26 +1,29 @@
+import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { useForm } from "react-hook-form";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
+import { useSignIn } from "@/api/auth";
+import { applyFieldErrors, errorMessage } from "@/api/errors";
 import { AuthHeading } from "@/components/auth/auth-heading";
-import { PrototypeNotice } from "@/components/auth/prototype-notice";
+import { FormAlert } from "@/components/shared/form-alert";
 import { FormField } from "@/components/shared/form-field";
 import { PasswordInput } from "@/components/auth/password-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { signIn } from "@/simulation/auth/mock-auth";
-import { signIn as startSession } from "@/store/slices/onboarding/onboarding-slice";
 import { ROUTES } from "@/lib/routes";
 import { signInSchema, type SignInValues } from "@/schemas/auth";
-import { useAppDispatch } from "@/store/hooks";
 
+/** Redirecting after success is `RedirectIfAuthed`'s job: it reacts to the cached user. */
 export function SignInPage() {
-  const navigate = useNavigate();
-  const dispatch = useAppDispatch();
+  const [params] = useSearchParams();
+  const signIn = useSignIn();
+  const [formError, setFormError] = useState<string | null>(null);
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors, isSubmitting },
   } = useForm<SignInValues>({
     resolver: zodResolver(signInSchema),
@@ -29,9 +32,13 @@ export function SignInPage() {
   });
 
   const onSubmit = async (values: SignInValues) => {
-    const account = await signIn(values);
-    dispatch(startSession(account));
-    navigate(ROUTES.app.overview);
+    setFormError(null);
+    try {
+      await signIn.mutateAsync(values);
+    } catch (err) {
+      if (!applyFieldErrors(err, setError, ["email", "password"]))
+        setFormError(errorMessage(err));
+    }
   };
 
   return (
@@ -47,6 +54,8 @@ export function SignInPage() {
         onSubmit={handleSubmit(onSubmit)}
         className="mt-8 space-y-5"
       >
+        {formError ? <FormAlert message={formError} /> : null}
+
         <FormField label="Email" error={errors.email?.message}>
           {(control) => (
             <Input
@@ -95,7 +104,7 @@ export function SignInPage() {
       <p className="mt-6 text-sm text-muted-foreground">
         New to AcadPath?{" "}
         <Link
-          to={ROUTES.signUp}
+          to={{ pathname: ROUTES.signUp, search: params.toString() }}
           className="font-medium text-primary underline-offset-4 hover:underline"
         >
           Create an account
@@ -103,19 +112,8 @@ export function SignInPage() {
       </p>
 
       <p className="mt-2 text-sm text-muted-foreground">
-        University administrator?{" "}
-        <Link
-          to={ROUTES.admin.dashboard}
-          className="font-medium text-primary underline-offset-4 hover:underline"
-        >
-          Open the admin console
-        </Link>
+        Administrators sign in here too and go straight to the admin console.
       </p>
-
-      <PrototypeNotice className="mt-8">
-        Sign-in is simulated — no account is checked and nothing is sent to a
-        server. Any valid email and password will continue.
-      </PrototypeNotice>
     </>
   );
 }

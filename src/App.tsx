@@ -2,6 +2,10 @@ import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { RootLayout } from "@/components/layouts/root-layout";
+import {
+  RedirectIfAuthed,
+  RequireAuth,
+} from "@/components/routing/route-guards";
 import { ROUTES } from "@/lib/routes";
 import { LandingPage } from "@/pages/landing/Landing";
 
@@ -38,7 +42,9 @@ const TranscriptPage = lazy(() =>
   })),
 );
 const AppLayout = lazy(() =>
-  import("@/components/layouts/app-layout").then((m) => ({ default: m.AppLayout })),
+  import("@/components/layouts/app-layout").then((m) => ({
+    default: m.AppLayout,
+  })),
 );
 const OverviewPage = lazy(() =>
   import("@/pages/overview/Overview").then((m) => ({
@@ -101,62 +107,77 @@ function App() {
           <Route element={<RootLayout />}>
             <Route path={ROUTES.home} element={<LandingPage />} />
 
-            <Route element={<AuthLayout />}>
-              <Route path={ROUTES.signIn} element={<SignInPage />} />
-              <Route path={ROUTES.signUp} element={<SignUpPage />} />
+            <Route element={<RedirectIfAuthed />}>
+              <Route element={<AuthLayout />}>
+                <Route path={ROUTES.signIn} element={<SignInPage />} />
+                <Route path={ROUTES.signUp} element={<SignUpPage />} />
+              </Route>
             </Route>
 
-            <Route path="/onboarding" element={<OnboardingLayout />}>
-              <Route
-                index
-                element={<Navigate to={ROUTES.onboarding.university} replace />}
-              />
-              <Route
-                path={ROUTES.onboarding.university}
-                element={<UniversityPage />}
-              />
-              <Route
-                path={ROUTES.onboarding.universityDocuments}
-                element={<UniversityDocumentsPage />}
-              />
-              <Route
-                path={ROUTES.onboarding.transcript}
-                element={<TranscriptPage />}
-              />
-              <Route
-                path={ROUTES.onboarding.complete}
-                element={<CompletePage />}
-              />
+            <Route
+              element={<RequireAuth role="STUDENT" onboarding="pending" />}
+            >
+              <Route path="/onboarding" element={<OnboardingLayout />}>
+                <Route
+                  index
+                  element={
+                    <Navigate to={ROUTES.onboarding.university} replace />
+                  }
+                />
+                <Route
+                  path={ROUTES.onboarding.university}
+                  element={<UniversityPage />}
+                />
+                <Route
+                  path={ROUTES.onboarding.universityDocuments}
+                  element={<UniversityDocumentsPage />}
+                />
+                <Route
+                  path={ROUTES.onboarding.transcript}
+                  element={<TranscriptPage />}
+                />
+                <Route
+                  path={ROUTES.onboarding.complete}
+                  element={<CompletePage />}
+                />
+              </Route>
             </Route>
 
-            <Route path={ROUTES.app.overview} element={<AppLayout />}>
-              <Route index element={<OverviewPage />} />
-              <Route path={ROUTES.app.plan} element={<SemesterPlanPage />} />
-              <Route path={ROUTES.app.whatIf} element={<WhatIfPage />} />
-              <Route path={ROUTES.app.courses} element={<CoursesPage />} />
-              <Route path={ROUTES.app.sources} element={<SourcesPage />} />
-              <Route path={ROUTES.app.advisor} element={<AdvisorPage />} />
-              <Route
-                path="*"
-                element={<Navigate to={ROUTES.app.overview} replace />}
-              />
+            <Route element={<RequireAuth role="STUDENT" onboarding="done" />}>
+              <Route path={ROUTES.app.overview} element={<AppLayout />}>
+                <Route index element={<OverviewPage />} />
+                <Route path={ROUTES.app.plan} element={<SemesterPlanPage />} />
+                <Route path={ROUTES.app.whatIf} element={<WhatIfPage />} />
+                <Route path={ROUTES.app.courses} element={<CoursesPage />} />
+                <Route path={ROUTES.app.sources} element={<SourcesPage />} />
+                <Route path={ROUTES.app.advisor} element={<AdvisorPage />} />
+                <Route
+                  path="*"
+                  element={<Navigate to={ROUTES.app.overview} replace />}
+                />
+              </Route>
             </Route>
 
-            <Route path={ROUTES.admin.dashboard} element={<AdminLayout />}>
-              <Route index element={<AdminDashboardPage />} />
-              <Route
-                path={ROUTES.admin.universities}
-                element={<UniversitiesPage />}
-              />
-              <Route
-                path={ROUTES.admin.courses}
-                element={<CoursesAdminPage />}
-              />
-              <Route path={ROUTES.admin.students} element={<StudentsPage />} />
-              <Route
-                path="*"
-                element={<Navigate to={ROUTES.admin.dashboard} replace />}
-              />
+            <Route element={<RequireAuth role="ADMIN" />}>
+              <Route path={ROUTES.admin.dashboard} element={<AdminLayout />}>
+                <Route index element={<AdminDashboardPage />} />
+                <Route
+                  path={ROUTES.admin.universities}
+                  element={<UniversitiesPage />}
+                />
+                <Route
+                  path={ROUTES.admin.courses}
+                  element={<CoursesAdminPage />}
+                />
+                <Route
+                  path={ROUTES.admin.students}
+                  element={<StudentsPage />}
+                />
+                <Route
+                  path="*"
+                  element={<Navigate to={ROUTES.admin.dashboard} replace />}
+                />
+              </Route>
             </Route>
 
             <Route path="*" element={<Navigate to={ROUTES.home} replace />} />

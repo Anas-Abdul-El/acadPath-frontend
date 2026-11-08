@@ -10,22 +10,20 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { catalogInfo } from "@/mock/academic/course-catalog";
+import { useCurrentUser } from "@/api/me";
 import { appNavigation } from "@/data/app-navigation";
-import type { Account } from "@/simulation/auth/mock-auth";
 import { initialsOf } from "@/lib/initials";
 
 type AppTopBarProps = {
-  account: Account;
   onSignOut: () => void;
 };
 
-export function AppTopBar({ account, onSignOut }: AppTopBarProps) {
+export function AppTopBar({ onSignOut }: AppTopBarProps) {
+  const { user, profile } = useCurrentUser();
+  const university = profile?.university;
   const { pathname } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const current = appNavigation.find((item) => item.to === pathname);
-
-  /** Course search from anywhere in the app — opens the catalog with the query applied. */
 
   return (
     <header className="sticky top-0 z-40 flex h-14 items-center gap-3 border-b border-border bg-background/90 px-4 backdrop-blur-md sm:px-6">
@@ -46,7 +44,6 @@ export function AppTopBar({ account, onSignOut }: AppTopBarProps) {
             AcadPath sections
           </SheetDescription>
           <AppSidebar
-            account={account}
             onSignOut={onSignOut}
             onNavigate={() => setMenuOpen(false)}
           />
@@ -54,7 +51,9 @@ export function AppTopBar({ account, onSignOut }: AppTopBarProps) {
       </Sheet>
 
       <p className="min-w-0 truncate text-sm text-muted-foreground">
-        <span className="hidden sm:inline">{catalogInfo.university} / </span>
+        {university ? (
+          <span className="hidden sm:inline">{university.name} / </span>
+        ) : null}
         <span className="text-foreground">{current?.label ?? "AcadPath"}</span>
       </p>
 
@@ -63,7 +62,7 @@ export function AppTopBar({ account, onSignOut }: AppTopBarProps) {
           aria-hidden="true"
           className="grid size-8 place-items-center rounded-full bg-secondary text-xs font-medium text-secondary-foreground lg:hidden"
         >
-          {initialsOf(account.name)}
+          {initialsOf(user.name)}
         </span>
       </div>
     </header>

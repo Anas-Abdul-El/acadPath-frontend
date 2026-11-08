@@ -27,7 +27,12 @@ export const signUpSchema = z.object({
     .min(1, "Create a password.")
     .min(PASSWORD_MIN_LENGTH, `Use at least ${PASSWORD_MIN_LENGTH} characters.`)
     .regex(/[A-Za-z]/, "Include at least one letter.")
-    .regex(/\d/, "Include at least one number."),
+    .regex(/\d/, "Include at least one number.")
+    // bcrypt only reads the first 72 bytes, so the API rejects anything longer.
+    .refine(
+      (value) => new TextEncoder().encode(value).length <= 72,
+      "Use a shorter password (72 bytes at most).",
+    ),
 });
 
 export type SignInValues = z.infer<typeof signInSchema>;

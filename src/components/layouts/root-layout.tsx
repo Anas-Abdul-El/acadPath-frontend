@@ -1,12 +1,15 @@
 import { useEffect } from "react"
 import { Outlet, useLocation } from "react-router-dom"
 
-/** Wraps every route: scroll reset. Shared state lives in the Redux store (see main.tsx). */
+import { Toaster } from "@/components/shared/toaster"
+
+/** Wraps every route: scroll reset and the toast region. */
 export function RootLayout() {
   return (
     <>
       <Outlet />
       <ScrollToTop />
+      <Toaster />
     </>
   )
 }

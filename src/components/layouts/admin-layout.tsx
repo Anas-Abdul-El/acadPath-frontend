@@ -3,13 +3,12 @@ import { ChevronRight, Menu } from "lucide-react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 
 import { AdminSidebar } from "@/components/admin/sidebar/admin-sidebar"
-import { Toaster } from "@/components/shared/toaster"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import { adminNavigation } from "@/data/admin-navigation"
 import { ROUTES } from "@/lib/routes"
 
-/** Admin console shell: ink sidebar (drawer on small screens), breadcrumbs, toasts. */
+/** Admin console shell: ink sidebar (drawer on small screens) and breadcrumbs. */
 export function AdminLayout() {
   const { pathname } = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -70,10 +69,6 @@ export function AdminLayout() {
                   </li>
                 </ol>
               </nav>
-
-              <span className="ml-auto hidden rounded-full border border-dashed border-highlight/70 bg-highlight/10 px-2.5 py-0.5 text-[11px] text-highlight-foreground sm:inline">
-                Sample data · changes reset on refresh
-              </span>
             </header>
 
             <main id="main" className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
@@ -81,7 +76,6 @@ export function AdminLayout() {
             </main>
           </div>
         </div>
-      <Toaster />
     </>
   )
 }
