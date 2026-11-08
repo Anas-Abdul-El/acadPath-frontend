@@ -1,9 +1,10 @@
 import { createSlice, type PayloadAction, type WithSlice } from "@reduxjs/toolkit"
 
-import { sessionReset } from "@/store/slices/onboarding/onboarding-slice"
-import { mockAdvisor } from "@/simulation/advisor/mock-advisor"
+import { advisorService } from "@/api/advisor"
+import { errorMessage } from "@/api/errors"
+import { sessionReset } from "@/store/session-actions"
 import { rootReducer, type AppThunk } from "@/store/root-reducer"
-import type { AdvisorService, ChatMessage } from "@/types/advisor"
+import type { ChatMessage } from "@/types/advisor"
 
 export type ChatStatus = "idle" | "thinking" | "streaming"
 
@@ -15,9 +16,6 @@ type AdvisorChatState = {
 }
 
 const initialState: AdvisorChatState = { messages: [], status: "idle", replyId: null }
-
-/** Swap in a real AI-backed service here; defaults to the local mock. */
-const advisorService: AdvisorService = mockAdvisor
 
 /** Holds the advisor conversation for the session, so it survives moving between app pages. */
 const advisorChatSlice = createSlice({
@@ -35,9 +33,9 @@ const advisorChatSlice = createSlice({
       if (reply) reply.content += action.payload.chunk
       state.status = "streaming"
     },
-    replyFailed(state, action: PayloadAction<string>) {
-      const reply = state.messages.find((message) => message.id === action.payload)
-      if (reply && !reply.content) reply.content = "Sorry — I couldn't answer that. Please try again."
+    replyFailed(state, action: PayloadAction<{ id: string; error: string }>) {
+      const reply = state.messages.find((message) => message.id === action.payload.id)
+      if (reply) reply.error = action.payload.error
     },
     replyFinished(state, action: PayloadAction<{ id: string; stopped: boolean }>) {
       const reply = state.messages.find((message) => message.id === action.payload.id)
@@ -92,8 +90,8 @@ export const sendMessage =
       try {
         for await (const chunk of advisorService.streamReply(history, current.signal))
           dispatch(replyChunkReceived({ id: reply.id, chunk }))
-      } catch {
-        if (!current.signal.aborted) dispatch(replyFailed(reply.id))
+      } catch (err) {
+        if (!current.signal.aborted) dispatch(replyFailed({ id: reply.id, error: errorMessage(err) }))
       } finally {
         dispatch(replyFinished({ id: reply.id, stopped: current.signal.aborted }))
         if (controller === current) controller = null

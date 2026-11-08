@@ -4,8 +4,8 @@ import { LogoMark } from "@/components/shared/logo"
 
 const SUGGESTIONS: { icon: LucideIcon; prompt: string; hint: string }[] = [
   { icon: TrendingUp, prompt: "How can I improve my GPA?", hint: "Where the biggest gains are" },
-  { icon: CalendarRange, prompt: "Which courses should I take next semester?", hint: "Your Spring 2027 plan, explained" },
-  { icon: BookOpen, prompt: "What are the prerequisites for CS 4410?", hint: "And whether you've met them" },
+  { icon: CalendarRange, prompt: "Which courses should I take next semester?", hint: "Your next semester's plan, explained" },
+  { icon: BookOpen, prompt: "Which prerequisites am I still missing?", hint: "For the courses left in my plan" },
   { icon: GraduationCap, prompt: "Am I on track to graduate?", hint: "Credits, semesters, critical path" },
 ]
 
