@@ -2,7 +2,7 @@ import { Sparkles } from "lucide-react";
 
 import { PlanCourseTile } from "@/components/webApp/plan/plan-course-tile";
 import { PLAN_STATUS_FILL } from "@/components/webApp/plan/plan-status-fill";
-import type { PlanSemester } from "@/lib/academic/plan";
+import type { PlanCourse, PlanSemester } from "@/lib/academic/plan";
 import { cn } from "@/lib/utils";
 
 const CONTAINER: Record<PlanSemester["status"], string> = {
@@ -13,7 +13,14 @@ const CONTAINER: Record<PlanSemester["status"], string> = {
 };
 
 /** One semester on the plan timeline: a term rail on the left, its courses on the right. */
-export function SemesterCard({ semester }: { semester: PlanSemester }) {
+export function SemesterCard({
+  semester,
+  onToggleSkip,
+}: {
+  semester: PlanSemester;
+  onToggleSkip?: (course: PlanCourse) => void;
+}) {
+  const activeCourses = semester.courses.filter((course) => !course.skipped);
   const headingId = `semester-${semester.id}-title`;
   const [season, year = ""] = semester.label.split(" ");
 
@@ -46,7 +53,7 @@ export function SemesterCard({ semester }: { semester: PlanSemester }) {
             <span className="font-mono text-foreground font-tabular">
               {semester.credits}
             </span>{" "}
-            credits · {semester.courses.length} courses
+            credits · {activeCourses.length} courses
           </p>
         </div>
       </div>
@@ -77,7 +84,11 @@ export function SemesterCard({ semester }: { semester: PlanSemester }) {
           className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3"
         >
           {semester.courses.map((course) => (
-            <PlanCourseTile key={course.code} course={course} />
+            <PlanCourseTile
+              key={course.planCourseId ?? course.id}
+              course={course}
+              onToggleSkip={onToggleSkip}
+            />
           ))}
         </ul>
       </div>

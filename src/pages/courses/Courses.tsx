@@ -2,48 +2,72 @@ import { useMemo } from "react";
 import { SearchX, Search, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
+import { useMyCourses } from "@/api/academics";
+import { useCurrentUser } from "@/api/me";
+import type {
+  CourseCategory,
+  MyCourseDto,
+  StudentCourseStatus,
+} from "@/api/types";
 import { AppPageHeader } from "@/components/shared/page-header";
+import { QueryError, Skeleton } from "@/components/shared/query-state";
 import { CourseCard } from "@/components/webApp/courses/course-card";
 import { FilterChips } from "@/components/webApp/courses/filter-chips";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  catalogInfo,
-  COURSE_CATEGORIES,
-  courseCatalog,
-  type CourseCategory,
-} from "@/mock/academic/course-catalog";
-import { filterCatalog } from "@/lib/academic/catalog";
-import { courseStatus, type StudentCourseStatus } from "@/lib/academic/record";
 import { pluralize } from "@/lib/files/format";
+import {
+  CATEGORY_ORDER,
+  categoryLabel,
+  COURSE_STATUS_LABEL,
+  enumToParam,
+  majorLabel,
+  paramToEnum,
+} from "@/lib/labels";
 
-type CategoryFilter = CourseCategory | "all";
-type StatusFilter = StudentCourseStatus["kind"] | "all";
-
-const CATEGORY_KEYS = Object.keys(COURSE_CATEGORIES) as CourseCategory[];
-const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
+const STATUS_ORDER: StudentCourseStatus[] = [
+  "NOT_TAKEN",
+  "PLANNED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "FAILED",
+];
+const STATUS_OPTIONS = [
   { value: "all", label: "Any status" },
-  { value: "not-taken", label: "Not taken" },
-  { value: "planned", label: "Planned" },
-  { value: "in-progress", label: "In progress" },
-  { value: "completed", label: "Completed" },
+  ...STATUS_ORDER.map((value) => ({
+    value: enumToParam(value),
+    label: COURSE_STATUS_LABEL[value],
+  })),
 ];
 
-const isCategory = (value: string | null): value is CourseCategory =>
-  CATEGORY_KEYS.includes(value as CourseCategory);
-const isStatus = (value: string | null): value is StatusFilter =>
-  STATUS_OPTIONS.some((o) => o.value === value);
+/** Lowercase with spaces and punctuation removed, so "cs3110" finds "CS 3110". */
+const compact = (value: string) =>
+  value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+function matchesQuery(course: MyCourseDto, query: string) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return (
+    compact(course.code).includes(compact(needle)) ||
+    course.name.toLowerCase().includes(needle) ||
+    Boolean(course.description?.toLowerCase().includes(needle))
+  );
+}
 
 export function CoursesPage() {
-  // Filters live in the URL so results are shareable and the top-bar search can link here.
+  // Filters live in the URL so results are shareable and other pages can link here.
   const [params, setParams] = useSearchParams();
+  const { profile } = useCurrentUser();
+  const courses = useMyCourses();
   const query = params.get("q") ?? "";
-  const categoryParam = params.get("category");
-  const statusParam = params.get("status");
-  const category: CategoryFilter = isCategory(categoryParam)
-    ? categoryParam
-    : "all";
-  const status: StatusFilter = isStatus(statusParam) ? statusParam : "all";
+  const category = paramToEnum<CourseCategory>(
+    params.get("category"),
+    CATEGORY_ORDER,
+  );
+  const status = paramToEnum<StudentCourseStatus>(
+    params.get("status"),
+    STATUS_ORDER,
+  );
 
   const update = (key: "q" | "category" | "status", value: string) => {
     setParams(
@@ -57,37 +81,45 @@ export function CoursesPage() {
     );
   };
 
+  const allCourses = courses.data;
   const matchingQuery = useMemo(
-    () => filterCatalog(courseCatalog, { query, category: "all" }),
-    [query],
+    () => (allCourses ?? []).filter((course) => matchesQuery(course, query)),
+    [allCourses, query],
   );
   const results = useMemo(
     () =>
       matchingQuery.filter(
         (course) =>
-          (category === "all" || course.category === category) &&
-          (status === "all" || courseStatus(course.code).kind === status),
+          (category === null || course.category === category) &&
+          (status === null || course.status === status),
       ),
     [matchingQuery, category, status],
   );
 
   const categoryOptions = [
-    { value: "all" as const, label: "All", count: matchingQuery.length },
-    ...CATEGORY_KEYS.map((key) => ({
-      value: key,
-      label: COURSE_CATEGORIES[key].label,
+    { value: "all", label: "All", count: matchingQuery.length },
+    ...CATEGORY_ORDER.map((key) => ({
+      value: enumToParam(key),
+      label: categoryLabel(key),
       count: matchingQuery.filter((course) => course.category === key).length,
     })),
   ];
-  const hasFilters = Boolean(query) || category !== "all" || status !== "all";
+  const hasFilters = Boolean(query) || category !== null || status !== null;
+
+  const university = profile?.university;
+  const major = profile?.major;
+  const description = [
+    allCourses ? pluralize(allCourses.length, "course") : "Courses",
+    major ? ` in ${majorLabel(major)}` : "",
+    university ? ` at ${university.name}` : "",
+    university?.catalogYear ? ` (${university.catalogYear} catalog)` : "",
+    ".",
+  ].join("");
 
   return (
     <div className="space-y-6">
       <title>Courses · AcadPath</title>
-      <AppPageHeader
-        title="Courses"
-        description={`${courseCatalog.length} courses in the ${catalogInfo.program} catalog at ${catalogInfo.university} (${catalogInfo.catalogYear}).`}
-      />
+      <AppPageHeader title="Courses" description={description} />
 
       <section
         aria-label="Filter courses"
@@ -125,13 +157,13 @@ export function CoursesPage() {
           <FilterChips
             label="Category"
             options={categoryOptions}
-            value={category}
+            value={category ? enumToParam(category) : "all"}
             onChange={(value) => update("category", value)}
           />
           <FilterChips
             label="Status"
             options={STATUS_OPTIONS}
-            value={status}
+            value={status ? enumToParam(status) : "all"}
             onChange={(value) => update("status", value)}
           />
         </div>
@@ -156,11 +188,27 @@ export function CoursesPage() {
         ) : null}
       </div>
 
-      {results.length > 0 ? (
+      {courses.isPending ? (
+        <div
+          role="status"
+          aria-label="Loading courses"
+          className="grid grid-cols-1 gap-4 md:grid-cols-2"
+        >
+          {Array.from({ length: 4 }, (_, index) => (
+            <Skeleton key={index} className="h-52 rounded-lg" />
+          ))}
+        </div>
+      ) : courses.error ? (
+        <QueryError
+          error={courses.error}
+          onRetry={() => courses.refetch()}
+          title="We couldn't load your courses"
+        />
+      ) : results.length > 0 ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {results.map((course) => (
             <CourseCard
-              key={course.code}
+              key={course.id}
               course={course}
               onSelectCode={(code) => {
                 setParams({ q: code }, { replace: true });
@@ -179,8 +227,9 @@ export function CoursesPage() {
             No courses match these filters
           </p>
           <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-            Try a course code like “MATH 3150”, part of a name like “systems”,
-            or a different category.
+            {allCourses?.length === 0
+              ? "Your major doesn't have any courses in the catalog yet."
+              : "Try a course code, part of a course name, or a different category."}
           </p>
           <Button
             variant="outline"

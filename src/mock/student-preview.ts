@@ -3,18 +3,9 @@
  * Shaped like a future API response so the preview can later be fed real data.
  */
 
-export type RequirementGroup = {
-  name: string
-  completed: number
-  required: number
-}
+import type { RequirementGroup, TermGpa } from "@/types/academic"
 
-export type TermGpa = {
-  term: string
-  shortTerm: string
-  gpa: number
-  credits: number
-}
+export type { RequirementGroup, TermGpa }
 
 export type CourseStatus = "in-progress" | "ready" | "prereq-pending"
 
