@@ -1,64 +1,56 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, Loader2, RotateCcw } from "lucide-react";
 import { useForm, useWatch } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 
+import { applyFieldErrors, errorMessage } from "@/api/errors";
+import { useCurrentUser, useSelectUniversity } from "@/api/me";
+import type { UniversitySelectionDto } from "@/api/types";
 import { FormField } from "@/components/shared/form-field";
 import { CatalogFoundPanel } from "@/components/onboarding/university/catalog-found-panel";
 import { OnboardingPageHeader } from "@/components/onboarding/onboarding-page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  saveUniversity,
-  selectCatalog,
-  selectUniversity,
-} from "@/store/slices/onboarding/onboarding-slice";
-import {
-  checkCatalogAvailability,
-  type CatalogCheckResult,
-} from "@/simulation/onboarding/university-catalog";
 import { ROUTES } from "@/lib/routes";
 import {
   universityStepSchema,
   type UniversityStepValues,
 } from "@/schemas/university";
-import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import { useAppDispatch } from "@/store/hooks";
+import { queueReset } from "@/store/slices/uploads/uploads-slice";
 
 type CheckState =
   | { status: "idle" }
-  | {
-      status: "available";
-      result: Extract<CatalogCheckResult, { status: "available" }>;
-    }
-  | { status: "error" };
+  | { status: "available"; result: UniversitySelectionDto }
+  | { status: "error"; message: string };
+
+const FIELDS = ["name", "country", "city", "major"] as const;
 
 export function UniversityPage() {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const saved = useAppSelector(selectUniversity);
-  const catalog = useAppSelector(selectCatalog);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const [check, setCheck] = useState<CheckState>(() =>
-    catalog?.status === "available"
-      ? { status: "available", result: catalog }
-      : { status: "idle" },
-  );
+  const { profile } = useCurrentUser();
+  const selectUniversity = useSelectUniversity();
+  const [check, setCheck] = useState<CheckState>({ status: "idle" });
 
   const {
     register,
     handleSubmit,
     control,
+    setError,
     formState: { errors, isSubmitting },
   } = useForm<UniversityStepValues>({
     resolver: zodResolver(universityStepSchema),
     mode: "onTouched",
-    defaultValues: { name: "", country: "", city: "", major: "", ...saved },
+    defaultValues: {
+      name: profile?.university?.name ?? "",
+      country: profile?.university?.country ?? "",
+      city: profile?.university?.city ?? "",
+      major: profile?.major?.name ?? "",
+    },
   });
-
-  useEffect(() => () => abortRef.current?.abort(), []);
 
   /** Any edit invalidates a previous check result. */
   const resetCheck = () =>
@@ -67,18 +59,17 @@ export function UniversityPage() {
     );
 
   const onSubmit = async (values: UniversityStepValues) => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
+    setCheck({ status: "idle" });
     try {
-      const result = await checkCatalogAvailability(values, controller.signal);
-      dispatch(saveUniversity(values, result));
-      if (result.status === "available")
+      const result = await selectUniversity.mutateAsync(values);
+      // Documents picked for another university don't describe this one.
+      if (result.replaced) dispatch(queueReset("universityDocuments"));
+      if (result.catalog.status === "AVAILABLE")
         setCheck({ status: "available", result });
       else navigate(ROUTES.onboarding.universityDocuments);
-    } catch {
-      if (!controller.signal.aborted) setCheck({ status: "error" });
+    } catch (err) {
+      if (!applyFieldErrors(err, setError, FIELDS))
+        setCheck({ status: "error", message: errorMessage(err) });
     }
   };
 
@@ -165,7 +156,7 @@ export function UniversityPage() {
             {check.status !== "available" ? (
               <div className="mt-7 flex flex-col-reverse items-stretch gap-3 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-xs text-muted-foreground">
-                  Simulated check — results come from sample data.
+                  We&rsquo;ll check whether we already have its course catalog.
                 </p>
                 <Button type="submit" size="xl" disabled={isSubmitting}>
                   {isSubmitting ? (
@@ -188,7 +179,7 @@ export function UniversityPage() {
             {isSubmitting ? (
               <p className="flex items-center gap-2.5 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                Looking for {universityName}'s public course catalog…
+                Looking for {universityName}&rsquo;s course catalog…
               </p>
             ) : null}
 
@@ -209,9 +200,7 @@ export function UniversityPage() {
                 <AlertTitle>
                   We couldn't finish checking your university
                 </AlertTitle>
-                <AlertDescription>
-                  Check your connection and press Continue to try again.
-                </AlertDescription>
+                <AlertDescription>{check.message}</AlertDescription>
               </Alert>
             ) : null}
           </div>

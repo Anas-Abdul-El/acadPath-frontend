@@ -1,10 +1,10 @@
 import { ArrowRight, BookOpenCheck, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { CatalogCheckResult } from "@/simulation/onboarding/university-catalog";
+import type { UniversitySelectionDto } from "@/api/types";
 
 type CatalogFoundPanelProps = {
-  result: Extract<CatalogCheckResult, { status: "available" }>;
+  result: Pick<UniversitySelectionDto, "university" | "catalog">;
   continueLabel: string;
   onContinue: () => void;
   onUploadAnyway: () => void;
@@ -30,7 +30,7 @@ export function CatalogFoundPanel({
             id="catalog-found-title"
             className="text-base font-medium text-foreground"
           >
-            We found public course information for {result.universityName}
+            We found course information for {result.university.name}
           </h2>
           <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
             AcadPath can use this catalog for course descriptions, credit hours,
@@ -41,22 +41,24 @@ export function CatalogFoundPanel({
             <div className="col-span-2 bg-background px-4 py-3 sm:col-span-1">
               <dt className="text-xs text-muted-foreground">Catalog</dt>
               <dd className="mt-0.5 truncate font-medium text-foreground">
-                {result.title}
+                {result.catalog.title ?? "Course catalog"}
               </dd>
-              <dd className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-                {result.source}
-              </dd>
+              {result.catalog.source ? (
+                <dd className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+                  {result.catalog.source}
+                </dd>
+              ) : null}
             </div>
             <div className="bg-background px-4 py-3">
               <dt className="text-xs text-muted-foreground">Courses</dt>
               <dd className="mt-0.5 font-mono text-lg text-foreground font-tabular">
-                {result.courses.toLocaleString()}
+                {result.catalog.courseCount.toLocaleString()}
               </dd>
             </div>
             <div className="bg-background px-4 py-3">
-              <dt className="text-xs text-muted-foreground">Programs</dt>
+              <dt className="text-xs text-muted-foreground">Majors</dt>
               <dd className="mt-0.5 font-mono text-lg text-foreground font-tabular">
-                {result.programs}
+                {result.catalog.majorCount.toLocaleString()}
               </dd>
             </div>
           </dl>

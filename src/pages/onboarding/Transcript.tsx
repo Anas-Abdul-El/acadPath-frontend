@@ -1,7 +1,10 @@
 import { useRef, useState, type FormEvent } from "react";
 import { ShieldCheck } from "lucide-react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
+import { errorMessage } from "@/api/errors";
+import { useCurrentUser, useUpdateProfile, useUploadDocuments } from "@/api/me";
+import { FormAlert } from "@/components/shared/form-alert";
 import { LocalFilesNotice } from "@/components/onboarding/uploads/local-files-notice";
 import { OnboardingPageHeader } from "@/components/onboarding/onboarding-page-header";
 import { StepActions } from "@/components/onboarding/step-actions";
@@ -9,33 +12,27 @@ import { AcademicYearField } from "@/components/onboarding/transcript/academic-y
 import { NewStudentNotice } from "@/components/onboarding/transcript/new-student-notice";
 import { UniversitySummary } from "@/components/onboarding/university-summary";
 import { MultiFileUploader } from "@/components/onboarding/uploads/multi-file-uploader";
-import type { AcademicYear } from "@/data/academic-years";
+import { NEW_STUDENT_YEAR, type AcademicYear } from "@/data/academic-years";
 import { transcriptDocumentTypes } from "@/data/upload-guidance";
 import { useUploadForm } from "@/hooks/use-upload-form";
+import { useUploadProgress } from "@/hooks/use-upload-progress";
 import { useUploadQueue } from "@/hooks/use-upload-queue";
 import { pluralize } from "@/lib/files/format";
-import {
-  academicYearSelected,
-  selectAcademicYear,
-  selectCatalog,
-  selectTranscriptRequired,
-  selectUniversity,
-  selectUniversityDocsSubmitted,
-  submitTranscript,
-} from "@/store/slices/onboarding/onboarding-slice";
 import { ROUTES } from "@/lib/routes";
-import { useAppDispatch, useAppSelector } from "@/store/hooks";
 
 const ERROR_ID = "transcript-error";
 
 export function TranscriptPage() {
   const navigate = useNavigate();
-  const dispatch = useAppDispatch();
-  const university = useAppSelector(selectUniversity);
-  const catalog = useAppSelector(selectCatalog);
-  const universityDocsSubmitted = useAppSelector(selectUniversityDocsSubmitted);
-  const academicYear = useAppSelector(selectAcademicYear);
-  const transcriptRequired = useAppSelector(selectTranscriptRequired);
+  const { profile, onboarding } = useCurrentUser();
+  const updateProfile = useUpdateProfile();
+  const uploadDocuments = useUploadDocuments();
+  const progress = useUploadProgress("Reading your transcript…");
+  const [academicYear, setAcademicYear] = useState<AcademicYear | null>(
+    profile?.yearOfStudy ?? null,
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const transcriptFiles = useUploadQueue("transcript");
   const { error, submit } = useUploadForm(
     transcriptFiles,
@@ -44,22 +41,43 @@ export function TranscriptPage() {
   const [yearError, setYearError] = useState<string>();
   const yearRef = useRef<HTMLSelectElement>(null);
 
-  if (!university)
-    return <Navigate to={ROUTES.onboarding.university} replace />;
-  // Without public university information, the documents step has to come first.
-  if (catalog?.status !== "available" && !universityDocsSubmitted)
-    return <Navigate to={ROUTES.onboarding.universityDocuments} replace />;
+  // The route guard only opens this step once a university is saved.
+  const university = profile?.university;
+  if (!university) return null;
 
+  const transcriptRequired = academicYear !== NEW_STUDENT_YEAR;
+  const alreadyUploaded = Boolean(onboarding?.transcriptUploaded);
   const fileCount = transcriptFiles.items.length;
-
-  const finish = () => {
-    dispatch(submitTranscript());
-    navigate(ROUTES.onboarding.complete);
-  };
+  const uploadedDocs = Boolean(onboarding?.universityDocumentsUploaded);
 
   const onYearChange = (year: AcademicYear) => {
-    dispatch(academicYearSelected(year));
+    setAcademicYear(year);
     setYearError(undefined);
+  };
+
+  /** Saves the year, then uploads the transcript when one is needed. */
+  const finish = async () => {
+    if (!academicYear) return;
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      if (profile?.yearOfStudy !== academicYear)
+        await updateProfile.mutateAsync({ yearOfStudy: academicYear });
+      if (transcriptRequired && fileCount > 0) {
+        progress.start();
+        await uploadDocuments.mutateAsync({
+          files: transcriptFiles.items.map((item) => item.file),
+          onProgress: progress.onProgress,
+        });
+        transcriptFiles.reset();
+      }
+      navigate(ROUTES.onboarding.complete);
+    } catch (err) {
+      setSubmitError(errorMessage(err));
+    } finally {
+      progress.stop();
+      setSubmitting(false);
+    }
   };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -69,14 +87,17 @@ export function TranscriptPage() {
       yearRef.current?.focus();
       return;
     }
-    // First-term students have no courses on record yet, so there's nothing to upload.
-    if (!transcriptRequired) {
+    // First-term students have no courses on record yet, so there's nothing to upload. A student
+    // coming back after uploading can continue without adding files again.
+    if (!transcriptRequired || (alreadyUploaded && fileCount === 0)) {
       event.preventDefault();
-      finish();
+      void finish();
       return;
     }
     return submit(finish)(event);
   };
+
+  const pendingLabel = submitting ? (progress.label ?? "Saving…") : null;
 
   return (
     <form noValidate aria-labelledby="transcript-title" onSubmit={onSubmit}>
@@ -137,7 +158,14 @@ export function TranscriptPage() {
               hint="Upload several PDFs and screenshots together — for example, a transcript plus portal screenshots."
               error={error}
               errorId={ERROR_ID}
+              disabled={submitting}
             />
+            {alreadyUploaded && fileCount === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Your transcript is already on file. Add files only if you want
+                to replace the courses we extracted.
+              </p>
+            ) : null}
             <LocalFilesNotice />
           </div>
 
@@ -179,19 +207,26 @@ export function TranscriptPage() {
         </div>
       )}
 
+      {submitError ? (
+        <FormAlert
+          title="We couldn't finish this step"
+          message={submitError}
+          className="mt-8"
+        />
+      ) : null}
+
       <div className="mt-10">
         <StepActions
           backTo={
-            universityDocsSubmitted
+            uploadedDocs
               ? ROUTES.onboarding.universityDocuments
               : ROUTES.onboarding.university
           }
           backLabel={
-            universityDocsSubmitted
-              ? "University documents"
-              : "University details"
+            uploadedDocs ? "University documents" : "University details"
           }
           continueLabel="Finish setup"
+          pendingLabel={pendingLabel}
           status={
             transcriptRequired && fileCount > 0
               ? `${pluralize(fileCount, "file")} ready to include`

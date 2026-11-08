@@ -1,6 +1,10 @@
+import { useState } from "react";
 import { Check } from "lucide-react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
+import { errorMessage } from "@/api/errors";
+import { useCurrentUser, useUploadUniversitySources } from "@/api/me";
+import { FormAlert } from "@/components/shared/form-alert";
 import { LocalFilesNotice } from "@/components/onboarding/uploads/local-files-notice";
 import { OnboardingPageHeader } from "@/components/onboarding/onboarding-page-header";
 import { StepActions } from "@/components/onboarding/step-actions";
@@ -8,43 +12,55 @@ import { UniversitySummary } from "@/components/onboarding/university-summary";
 import { MultiFileUploader } from "@/components/onboarding/uploads/multi-file-uploader";
 import { universityDocumentTopics } from "@/data/upload-guidance";
 import { useUploadForm } from "@/hooks/use-upload-form";
+import { useUploadProgress } from "@/hooks/use-upload-progress";
 import { useUploadQueue } from "@/hooks/use-upload-queue";
 import { pluralize } from "@/lib/files/format";
-import {
-  selectCatalog,
-  selectUniversity,
-  submitUniversityDocs,
-} from "@/store/slices/onboarding/onboarding-slice";
 import { ROUTES } from "@/lib/routes";
-import { useAppDispatch, useAppSelector } from "@/store/hooks";
 
 const ERROR_ID = "university-documents-error";
 
 export function UniversityDocumentsPage() {
   const navigate = useNavigate();
-  const dispatch = useAppDispatch();
-  const university = useAppSelector(selectUniversity);
-  const catalog = useAppSelector(selectCatalog);
+  const { profile, onboarding } = useCurrentUser();
+  const upload = useUploadUniversitySources();
+  const progress = useUploadProgress("Extracting courses…");
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const universityDocuments = useUploadQueue("universityDocuments");
   const { error, submit } = useUploadForm(
     universityDocuments,
     "Add at least one PDF or screenshot of your university's course information to continue.",
   );
 
-  if (!university)
-    return <Navigate to={ROUTES.onboarding.university} replace />;
+  // The route guard only opens this step once a university is saved.
+  const university = profile?.university;
+  if (!university) return null;
 
-  const catalogFound = catalog?.status === "available";
+  const catalogFound = onboarding?.catalogStatus === "AVAILABLE";
   const fileCount = universityDocuments.items.length;
+  const majorName = profile?.major?.name;
+
+  const onValid = async () => {
+    setUploadError(null);
+    progress.start();
+    try {
+      await upload.mutateAsync({
+        files: universityDocuments.items.map((item) => item.file),
+        onProgress: progress.onProgress,
+      });
+      universityDocuments.reset();
+      navigate(ROUTES.onboarding.transcript);
+    } catch (err) {
+      setUploadError(errorMessage(err));
+    } finally {
+      progress.stop();
+    }
+  };
 
   return (
     <form
       noValidate
       aria-labelledby="university-documents-title"
-      onSubmit={submit(() => {
-        dispatch(submitUniversityDocs());
-        navigate(ROUTES.onboarding.transcript);
-      })}
+      onSubmit={submit(onValid)}
     >
       <title>University documents · AcadPath</title>
       <UniversitySummary university={university} />
@@ -57,15 +73,16 @@ export function UniversityDocumentsPage() {
           description={
             catalogFound ? (
               <p>
-                We already have {university.name}'s public catalog. Add
-                documents for anything it may not cover, such as department
-                program sheets or updated requirements.
+                We already have {university.name}&rsquo;s catalog. Add documents
+                for anything it may not cover, such as department program sheets
+                or updated requirements.
               </p>
             ) : (
               <p>
-                We couldn't find publicly available academic information for
-                your university. To build an accurate academic plan, please
-                upload your university's course information.
+                We couldn&rsquo;t find a course catalog for your university
+                {majorName ? <> and {majorName}</> : null}. To build an accurate
+                academic plan, upload your university&rsquo;s course information
+                and we&rsquo;ll extract the courses from it.
               </p>
             )
           }
@@ -80,7 +97,14 @@ export function UniversityDocumentsPage() {
             hint="Upload several PDFs and screenshots together — catalog pages, program sheets, or study plans."
             error={error}
             errorId={ERROR_ID}
+            disabled={upload.isPending}
           />
+          {uploadError ? (
+            <FormAlert
+              title="We couldn't use these files"
+              message={uploadError}
+            />
+          ) : null}
           <LocalFilesNotice />
         </div>
 
@@ -116,7 +140,8 @@ export function UniversityDocumentsPage() {
         <StepActions
           backTo={ROUTES.onboarding.university}
           backLabel="University details"
-          continueLabel="Continue"
+          continueLabel={catalogFound ? "Upload and continue" : "Continue"}
+          pendingLabel={progress.label}
           status={
             fileCount > 0
               ? `${pluralize(fileCount, "file")} ready to include`
