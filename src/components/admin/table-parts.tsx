@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { Search, SearchX, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -14,19 +14,46 @@ export function TableToolbar({ children }: { children: ReactNode }) {
   )
 }
 
+/** Search box. With `debounceMs`, `onChange` fires once typing pauses (for searches that hit the API). */
 export function SearchField({
   id,
   label,
   value,
   onChange,
   placeholder,
+  debounceMs = 0,
 }: {
   id: string
   label: string
   value: string
   onChange: (value: string) => void
   placeholder: string
+  debounceMs?: number
 }) {
+  const [draft, setDraft] = useState(value)
+  const [synced, setSynced] = useState(value)
+  const onChangeRef = useRef(onChange)
+  useEffect(() => {
+    onChangeRef.current = onChange
+  })
+
+  // The value changed from outside (e.g. "Clear filters"): show it.
+  if (value !== synced) {
+    setSynced(value)
+    setDraft(value)
+  }
+
+  useEffect(() => {
+    if (!debounceMs || draft === value) return
+    const timer = window.setTimeout(() => onChangeRef.current(draft), debounceMs)
+    return () => window.clearTimeout(timer)
+  }, [draft, value, debounceMs])
+
+  const change = (next: string, immediate = false) => {
+    setDraft(next)
+    if (!debounceMs || immediate) onChange(next)
+  }
+
   return (
     <div className="min-w-0 flex-1 sm:min-w-64">
       <label htmlFor={id} className="mb-1.5 block text-xs font-medium text-muted-foreground">
@@ -37,15 +64,18 @@ export function SearchField({
         <Input
           id={id}
           type="search"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
+          value={draft}
+          onChange={(event) => change(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") change(draft, true)
+          }}
           placeholder={placeholder}
           className="h-10 pr-9 pl-9"
         />
-        {value ? (
+        {draft ? (
           <button
             type="button"
-            onClick={() => onChange("")}
+            onClick={() => change("", true)}
             aria-label="Clear search"
             className="absolute top-1/2 right-2 grid size-6 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:text-foreground"
           >

@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import type { AdminCourse } from "@/mock/admin/courses";
 import { universitySchema } from "@/schemas/university";
 
 const optionalText = (max: number, message: string) =>
@@ -49,84 +48,77 @@ export const parseCodeList = (value: string) =>
     .map(normalizeCode);
 
 /**
- * Course form schema. Built per form so it can check codes against the selected university's
- * existing courses: unique code, and prerequisites/corequisites that exist and aren't the course itself.
+ * Course form schema. Format rules only: whether a code is already used, or whether requisite
+ * codes exist in the major, is checked by the API (400/409 errors land on the matching field).
  */
-export function createCourseSchema(
-  courses: AdminCourse[],
-  editingId: string | null,
-) {
-  return z
-    .object({
-      universityId: z.string().min(1, "Choose a university."),
-      code: z
-        .string()
-        .trim()
-        .min(1, "Enter a course code.")
-        .refine(
-          (value) => COURSE_CODE.test(normalizeCode(value)),
-          "Use a code like CS 3110 or MATH 101.",
-        ),
-      title: z
-        .string()
-        .trim()
-        .min(3, "Enter the course name.")
-        .max(100, "Use 100 characters or fewer."),
-      description: z
-        .string()
-        .trim()
-        .min(20, "Write at least a sentence (20+ characters).")
-        .max(400, "Keep the description under 400 characters."),
-      credits: z
-        .number({ error: "Enter credit hours." })
-        .int("Use a whole number.")
-        .min(0, "Credits can't be negative.")
-        .max(8, "Courses carry at most 8 credits."),
-      category: z.enum(
-        [
-          "major-requirement",
-          "major-elective",
-          "math-science",
-          "general-education",
-        ],
-        {
-          error: "Choose a category.",
-        },
+export const courseFormSchema = z
+  .object({
+    universityId: z.string().min(1, "Choose a university."),
+    majorId: z.string().min(1, "Choose a major."),
+    code: z
+      .string()
+      .trim()
+      .min(1, "Enter a course code.")
+      .refine(
+        (value) => COURSE_CODE.test(normalizeCode(value)),
+        "Use a code like CS 3110 or MATH 101.",
       ),
-      prerequisites: z.string(),
-      corequisites: z.string(),
-    })
-    .superRefine((values, ctx) => {
-      const code = normalizeCode(values.code);
-      const sameUniversity = courses.filter(
-        (c) => c.universityId === values.universityId && c.id !== editingId,
-      );
-      const known = new Set(sameUniversity.map((c) => c.code));
+    name: z
+      .string()
+      .trim()
+      .min(3, "Enter the course name.")
+      .max(100, "Use 100 characters or fewer."),
+    description: z
+      .string()
+      .trim()
+      .min(20, "Write at least a sentence (20+ characters).")
+      .max(400, "Keep the description under 400 characters."),
+    credits: z
+      .number({ error: "Enter credit hours." })
+      .int("Use a whole number.")
+      .min(0, "Credits can't be negative.")
+      .max(8, "Courses carry at most 8 credits."),
+    category: z.enum(
+      ["MAJOR_REQUIREMENT", "MAJOR_ELECTIVE", "MATH_SCIENCE", "GENERAL_EDUCATION"],
+      { error: "Choose a category." },
+    ),
+    offeredTerms: z.array(z.enum(["FALL", "SPRING", "SUMMER"])),
+    prerequisites: z.string(),
+    corequisites: z.string(),
+  })
+  .superRefine((values, ctx) => {
+    const code = normalizeCode(values.code);
+    for (const field of ["prerequisites", "corequisites"] as const) {
+      const codes = parseCodeList(values[field]);
+      const invalid = codes.filter((c) => !COURSE_CODE.test(c));
+      const message = invalid.length
+        ? `Check the format of ${invalid.join(", ")}.`
+        : codes.includes(code)
+          ? "A course can't require itself."
+          : null;
+      if (message) ctx.addIssue({ code: "custom", path: [field], message });
+    }
+  });
 
-      if (known.has(code))
-        ctx.addIssue({
-          code: "custom",
-          path: ["code"],
-          message: `${code} already exists at this university.`,
-        });
+export type CourseFormValues = z.infer<typeof courseFormSchema>;
 
-      for (const field of ["prerequisites", "corequisites"] as const) {
-        const codes = parseCodeList(values[field]);
-        const invalid = codes.filter((c) => !COURSE_CODE.test(c));
-        const self = codes.includes(code);
-        const unknown = codes.filter(
-          (c) => COURSE_CODE.test(c) && c !== code && !known.has(c),
-        );
-        const message = invalid.length
-          ? `Check the format of ${invalid.join(", ")}.`
-          : self
-            ? "A course can't require itself."
-            : unknown.length
-              ? `${unknown.join(", ")} ${unknown.length === 1 ? "isn't" : "aren't"} in this university's courses.`
-              : null;
-        if (message) ctx.addIssue({ code: "custom", path: [field], message });
-      }
-    });
-}
+/** Admin major form (inside the university details sheet). */
+export const majorFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(2, "Enter the major's name.")
+    .max(100, "Use 100 characters or fewer."),
+  degreeType: z.enum(["BACHELOR", "MASTER", "DOCTORATE", "ASSOCIATE", "OTHER"]),
+  totalRequiredCredits: z
+    .string()
+    .trim()
+    .refine(
+      (value) =>
+        value === "" ||
+        (/^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 300),
+      "Use a whole number from 1 to 300, or leave it empty.",
+    ),
+});
 
-export type CourseFormValues = z.infer<ReturnType<typeof createCourseSchema>>;
+export type MajorFormValues = z.infer<typeof majorFormSchema>;

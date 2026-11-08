@@ -1,7 +1,8 @@
 import { useState } from "react"
 import { Plus, Sparkles } from "lucide-react"
-import { useSearchParams } from "react-router-dom"
 
+import { useAdminCourses, useAdminMajors, useDeleteCourse, useUniversityOptions } from "@/api/admin"
+import type { AdminCourseDto, CourseSource } from "@/api/types"
 import { ConfirmDialog } from "@/components/admin/confirm-dialog"
 import { CodeList } from "@/components/admin/courses/code-list"
 import { CourseForm } from "@/components/admin/courses/course-form"
@@ -9,164 +10,125 @@ import { DataTable, type Column } from "@/components/admin/data-table"
 import { DetailList, DetailSection, DetailSheet } from "@/components/admin/detail-sheet"
 import { FormDialog } from "@/components/admin/form-dialog"
 import { RowActions } from "@/components/admin/row-actions"
-import { StatusBadge, type BadgeTone } from "@/components/admin/status-badge"
+import { StatusBadge } from "@/components/admin/status-badge"
 import { EmptyResults, FilterSelect, ResultCount, SearchField, TableToolbar } from "@/components/admin/table-parts"
 import { AppPageHeader } from "@/components/shared/page-header"
+import { QueryError, Skeleton } from "@/components/shared/query-state"
 import { Button } from "@/components/ui/button"
-import { COURSE_CATEGORIES, type CourseCategory } from "@/mock/academic/course-catalog"
-import type { AdminCourse } from "@/mock/admin/courses"
-import { courseDeleted, courseSaved, CURRENT_ADMIN, selectAdminData } from "@/store/slices/admin/admin-slice"
-import { formatDate, formatRelative } from "@/lib/admin/format"
-import { universityById } from "@/lib/admin/selectors"
-import { normalizeCode, parseCodeList, type CourseFormValues } from "@/schemas/admin"
+import { useListParams } from "@/hooks/use-list-params"
 import { useToast } from "@/hooks/use-toast"
-import { useAppDispatch, useAppSelector } from "@/store/hooks"
+import { formatDate, formatRelative } from "@/lib/admin/format"
+import { CATEGORY_TONE } from "@/lib/admin/tones"
+import { CATEGORY_ORDER, categoryLabel, COURSE_SOURCE_LABEL, offeredLabel } from "@/lib/labels"
 
-const CATEGORY_TONE: Record<CourseCategory, BadgeTone> = {
-  "major-requirement": "info",
-  "major-elective": "highlight",
-  "math-science": "neutral",
-  "general-education": "neutral",
+const PAGE_SIZE = 20
+// `university` keeps the links other admin pages already use (`/admin/courses?university=<id>`).
+const FILTERS = ["university", "major", "category", "source"] as const
+const SOURCES = Object.keys(COURSE_SOURCE_LABEL) as CourseSource[]
+
+const SOURCE_DESCRIPTION: Record<CourseSource, string> = {
+  AI_EXTRACTED: "Captured by AI from uploaded documents",
+  CATALOG_IMPORT: "Official catalog import",
+  ADMIN: "Added by an admin",
 }
 
-const compact = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "")
-
 export function CoursesAdminPage() {
-  const state = useAppSelector(selectAdminData)
-  const dispatch = useAppDispatch()
   const toast = useToast()
-  const [params] = useSearchParams()
-  const universities = universityById(state)
-  const [query, setQuery] = useState("")
-  const [universityId, setUniversityId] = useState(() => {
-    const fromUrl = params.get("university")
-    return fromUrl && universities.has(fromUrl) ? fromUrl : "all"
+  const list = useListParams(FILTERS)
+  const { university: universityId, major: majorId } = list.filters
+  const category = CATEGORY_ORDER.find((c) => c === list.filters.category)
+  const source = SOURCES.find((s) => s === list.filters.source)
+
+  const universities = useUniversityOptions()
+  const majors = useAdminMajors(universityId || null)
+  const courses = useAdminCourses({
+    page: list.page,
+    pageSize: PAGE_SIZE,
+    q: list.q,
+    universityId: universityId || undefined,
+    majorId: majorId || undefined,
+    category,
+    source,
   })
-  const [category, setCategory] = useState<CourseCategory | "all">("all")
-  const [source, setSource] = useState<"all" | "ai" | "other">("all")
-  const [viewing, setViewing] = useState<AdminCourse | null>(null)
-  const [editing, setEditing] = useState<AdminCourse | "new" | null>(null)
-  const [deleting, setDeleting] = useState<AdminCourse | null>(null)
+  const deleteCourse = useDeleteCourse()
 
-  const universitiesWithCourses = state.universities
-    .filter((u) => state.courses.some((c) => c.universityId === u.id) || u.id === universityId)
-    .sort((a, b) => a.name.localeCompare(b.name))
+  const [viewing, setViewing] = useState<AdminCourseDto | null>(null)
+  const [editing, setEditing] = useState<AdminCourseDto | "new" | null>(null)
+  const [deleting, setDeleting] = useState<AdminCourseDto | null>(null)
 
-  const rows = state.courses.filter((course) => {
-    const q = query.trim().toLowerCase()
-    const matches = !q || compact(course.code).includes(compact(q)) || course.title.toLowerCase().includes(q)
-    const sourceMatch = source === "all" || (source === "ai") === Boolean(course.capturedByAi)
-    return (
-      matches &&
-      sourceMatch &&
-      (universityId === "all" || course.universityId === universityId) &&
-      (category === "all" || course.category === category)
-    )
-  })
+  const rows = courses.data?.data ?? []
+  const meta = courses.data?.meta
 
-  const clearFilters = () => {
-    setQuery("")
-    setUniversityId("all")
-    setCategory("all")
-    setSource("all")
-  }
-
-  const dependentsOf = (course: AdminCourse) =>
-    state.courses.filter(
-      (c) => c.universityId === course.universityId && (c.prerequisites.includes(course.code) || c.corequisites.includes(course.code)),
-    )
-
-  const save = (values: CourseFormValues) => {
-    const existing = editing !== "new" ? editing : null
-    const code = normalizeCode(values.code)
-    const course: AdminCourse = {
-      id: existing?.id ?? `${values.universityId}-${code.replace(/\s+/g, "-").toLowerCase()}-${crypto.randomUUID().slice(0, 4)}`,
-      universityId: values.universityId,
-      code,
-      title: values.title.trim(),
-      description: values.description.trim(),
-      credits: values.credits,
-      category: values.category,
-      prerequisites: parseCodeList(values.prerequisites),
-      corequisites: parseCodeList(values.corequisites),
-      updatedAt: new Date().toISOString().slice(0, 10),
-      updatedBy: CURRENT_ADMIN,
-    }
-    dispatch(courseSaved(course))
-    if (viewing?.id === course.id) setViewing(course)
-    setEditing(null)
-    toast({
-      tone: "success",
-      title: existing ? "Course updated" : "Course added",
-      description: `${code} ${course.title} · sample data only, resets on refresh.`,
+  const confirmDelete = () => {
+    const course = deleting
+    if (!course) return
+    setDeleting(null)
+    deleteCourse.mutate(course.id, {
+      onSuccess: () => {
+        if (viewing?.id === course.id) setViewing(null)
+        toast({ tone: "success", title: "Course deleted", description: `${course.code} ${course.name} was removed.` })
+      },
     })
   }
 
-  const confirmDelete = () => {
-    if (!deleting) return
-    dispatch(courseDeleted(deleting.id))
-    if (viewing?.id === deleting.id) setViewing(null)
-    toast({ tone: "success", title: "Course deleted", description: `${deleting.code} ${deleting.title} was removed.` })
-    setDeleting(null)
-  }
-
-  const columns: Column<AdminCourse>[] = [
+  const columns: Column<AdminCourseDto>[] = [
     {
       id: "code",
       header: "Code",
-      sortValue: (c) => c.code,
       cell: (c) => <span className="font-mono text-xs whitespace-nowrap text-foreground">{c.code}</span>,
     },
     {
-      id: "title",
+      id: "name",
       header: "Course",
-      sortValue: (c) => c.title,
       className: "min-w-56",
       cell: (c) => (
         <button type="button" onClick={() => setViewing(c)} className="max-w-xs text-left">
           <span className="flex items-center gap-1.5">
-            <span className="text-[13px] font-medium text-foreground hover:text-primary hover:underline">{c.title}</span>
-            {c.capturedByAi ? (
+            <span className="text-[13px] font-medium text-foreground hover:text-primary hover:underline">{c.name}</span>
+            {c.source === "AI_EXTRACTED" ? (
               <span className="inline-flex shrink-0 items-center gap-0.5 rounded border border-highlight/60 bg-highlight/15 px-1 font-mono text-[10px] text-highlight-foreground">
                 <Sparkles aria-hidden="true" className="size-2.5" />
                 AI<span className="sr-only">-captured</span>
               </span>
             ) : null}
           </span>
-          <span className="line-clamp-1 text-xs text-muted-foreground">{c.description}</span>
+          {c.description ? <span className="line-clamp-1 text-xs text-muted-foreground">{c.description}</span> : null}
         </button>
       ),
     },
     {
       id: "university",
-      header: "University",
+      header: "University · major",
       hideBelow: "md",
-      sortValue: (c) => universities.get(c.universityId)?.name ?? "",
-      cell: (c) => {
-        const university = universities.get(c.universityId)
-        return <span className="text-[13px] text-muted-foreground" title={university?.name}>{university?.shortName ?? university?.name}</span>
-      },
+      cell: (c) => (
+        <span className="text-[13px] text-muted-foreground" title={`${c.university.name} · ${c.major.name}`}>
+          {c.university.shortName ?? c.university.name}
+          <span className="block text-xs">{c.major.name}</span>
+        </span>
+      ),
     },
     {
       id: "category",
       header: "Category",
       hideBelow: "lg",
-      sortValue: (c) => COURSE_CATEGORIES[c.category].label,
-      cell: (c) => <StatusBadge tone={CATEGORY_TONE[c.category]}>{COURSE_CATEGORIES[c.category].label}</StatusBadge>,
+      cell: (c) => <StatusBadge tone={CATEGORY_TONE[c.category]}>{categoryLabel(c.category)}</StatusBadge>,
     },
     {
       id: "credits",
       header: "Cr",
       align: "right",
-      sortValue: (c) => c.credits,
       cell: (c) => <span className="font-mono text-xs text-foreground font-tabular">{c.credits}</span>,
     },
-    { id: "prereqs", header: "Prerequisites", hideBelow: "lg", cell: (c) => <CodeList codes={c.prerequisites} /> },
+    {
+      id: "prereqs",
+      header: "Prerequisites",
+      hideBelow: "lg",
+      cell: (c) => <CodeList codes={c.prerequisites.map((p) => p.code)} />,
+    },
     {
       id: "updated",
       header: "Updated",
       hideBelow: "sm",
-      sortValue: (c) => c.updatedAt,
       cell: (c) => <span className="text-xs whitespace-nowrap text-muted-foreground">{formatRelative(c.updatedAt)}</span>,
     },
   ]
@@ -186,57 +148,82 @@ export function CoursesAdminPage() {
       />
 
       <TableToolbar>
-        <SearchField id="course-search" label="Search" value={query} onChange={setQuery} placeholder="Code or name, e.g. CS 3110" />
+        <SearchField
+          id="course-search"
+          label="Search"
+          value={list.q}
+          onChange={(q) => list.set({ q })}
+          placeholder="Code or name, e.g. CS 3110"
+          debounceMs={300}
+        />
         <FilterSelect
           id="course-university"
           label="University"
-          value={universityId}
-          onChange={setUniversityId}
-          options={[{ value: "all", label: "All universities" }, ...universitiesWithCourses.map((u) => ({ value: u.id, label: u.name }))]}
+          value={universityId || "all"}
+          // Majors belong to one university, so changing it clears the major filter.
+          onChange={(university) => list.set({ university, major: null })}
+          options={[
+            { value: "all", label: "All universities" },
+            ...(universities.data?.data ?? []).map((u) => ({ value: u.id, label: u.name })),
+          ]}
+        />
+        {universityId ? (
+          <FilterSelect
+            id="course-major"
+            label="Major"
+            value={majorId || "all"}
+            onChange={(major) => list.set({ major })}
+            options={[{ value: "all", label: "All majors" }, ...(majors.data ?? []).map((m) => ({ value: m.id, label: m.name }))]}
+          />
+        ) : null}
+        <FilterSelect
+          id="course-category"
+          label="Category"
+          value={category ?? "all"}
+          onChange={(value) => list.set({ category: value })}
+          options={[{ value: "all", label: "All categories" }, ...CATEGORY_ORDER.map((c) => ({ value: c, label: categoryLabel(c) }))]}
         />
         <FilterSelect
           id="course-source"
           label="Source"
-          value={source}
-          onChange={setSource}
-          options={[
-            { value: "all" as const, label: "All sources" },
-            { value: "ai" as const, label: "Captured by AI" },
-            { value: "other" as const, label: "Catalog or admin" },
-          ]}
-        />
-        <FilterSelect
-          id="course-category"
-          label="Category"
-          value={category}
-          onChange={setCategory}
-          options={[
-            { value: "all" as const, label: "All categories" },
-            ...(Object.keys(COURSE_CATEGORIES) as CourseCategory[]).map((c) => ({ value: c, label: COURSE_CATEGORIES[c].label })),
-          ]}
+          value={source ?? "all"}
+          onChange={(value) => list.set({ source: value })}
+          options={[{ value: "all", label: "All sources" }, ...SOURCES.map((s) => ({ value: s, label: COURSE_SOURCE_LABEL[s] }))]}
         />
       </TableToolbar>
 
-      <ResultCount shown={rows.length} total={state.courses.length} noun="courses" />
-
-      <DataTable
-        rows={rows}
-        columns={columns}
-        getRowId={(c) => c.id}
-        caption="Courses"
-        initialSort={{ id: "updated", direction: "desc" }}
-        pageSize={12}
-        empty={<EmptyResults onClear={clearFilters} />}
-        actions={(c) => (
-          <RowActions name={`${c.code} ${c.title}`} onView={() => setViewing(c)} onEdit={() => setEditing(c)} onDelete={() => setDeleting(c)} />
-        )}
-      />
+      {courses.error ? (
+        <QueryError error={courses.error} onRetry={() => courses.refetch()} title="We couldn't load courses" />
+      ) : !meta ? (
+        <Skeleton className="h-96 w-full rounded-lg" />
+      ) : (
+        <>
+          <ResultCount shown={meta.total} total={meta.total} noun={meta.total === 1 ? "course" : "courses"} />
+          <DataTable
+            rows={rows}
+            columns={columns}
+            getRowId={(c) => c.id}
+            caption="Courses"
+            pagination={{ page: meta.page, pageSize: meta.pageSize, total: meta.total, onPageChange: (page) => list.set({ page }) }}
+            busy={courses.isPlaceholderData}
+            empty={list.hasFilters ? <EmptyResults onClear={list.clear} /> : <EmptyResults message="No courses yet." />}
+            actions={(c) => (
+              <RowActions
+                name={`${c.code} ${c.name}`}
+                onView={() => setViewing(c)}
+                onEdit={() => setEditing(c)}
+                onDelete={() => setDeleting(c)}
+              />
+            )}
+          />
+        </>
+      )}
 
       <DetailSheet
         open={viewing !== null}
         onOpenChange={(open) => !open && setViewing(null)}
-        title={viewing?.title}
-        description={viewing ? `${viewing.code} · ${universities.get(viewing.universityId)?.name}` : undefined}
+        title={viewing?.name}
+        description={viewing ? `${viewing.code} · ${viewing.university.name} · ${viewing.major.name}` : undefined}
         footer={
           viewing ? (
             <>
@@ -253,27 +240,24 @@ export function CoursesAdminPage() {
         {viewing ? (
           <>
             <DetailSection title="Description">
-              <p className="text-sm leading-relaxed text-foreground">{viewing.description}</p>
+              <p className="text-sm leading-relaxed text-foreground">{viewing.description ?? "No description."}</p>
             </DetailSection>
             <DetailSection title="Details">
               <DetailList
                 items={[
-                  { label: "Category", value: <StatusBadge tone={CATEGORY_TONE[viewing.category]}>{COURSE_CATEGORIES[viewing.category].label}</StatusBadge> },
-                  { label: "Credit hours", value: viewing.credits },
-                  { label: "Prerequisites", value: <CodeList codes={viewing.prerequisites} /> },
-                  { label: "Corequisites", value: <CodeList codes={viewing.corequisites} /> },
-                  { label: "Required by", value: <CodeList codes={dependentsOf(viewing).map((c) => c.code)} /> },
-                  { label: "Last updated", value: `${formatDate(viewing.updatedAt)} · ${viewing.updatedBy}` },
                   {
-                    label: "Source",
-                    value: viewing.capturedByAi ? (
-                      "Captured by AI from student-uploaded documents"
-                    ) : viewing.updatedBy === "Catalog import" ? (
-                      "Official catalog import"
-                    ) : (
-                      "Added by an admin"
-                    ),
+                    label: "Category",
+                    value: <StatusBadge tone={CATEGORY_TONE[viewing.category]}>{categoryLabel(viewing.category)}</StatusBadge>,
                   },
+                  { label: "Credit hours", value: viewing.credits },
+                  { label: "Offered", value: offeredLabel(viewing.offeredTerms) },
+                  { label: "Prerequisites", value: <CodeList codes={viewing.prerequisites.map((c) => c.code)} /> },
+                  { label: "Corequisites", value: <CodeList codes={viewing.corequisites.map((c) => c.code)} /> },
+                  {
+                    label: "Last updated",
+                    value: `${formatDate(viewing.updatedAt)}${viewing.updatedBy ? ` · ${viewing.updatedBy.name}` : ""}`,
+                  },
+                  { label: "Source", value: SOURCE_DESCRIPTION[viewing.source] },
                 ]}
               />
             </DetailSection>
@@ -285,17 +269,21 @@ export function CoursesAdminPage() {
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
         title={editing === "new" ? "Add course" : "Edit course"}
-        description="Codes are checked against the selected university's courses."
+        description="Requisite codes are checked against the selected major's courses."
       >
         {editing !== null ? (
           <CourseForm
             key={editing === "new" ? "new" : editing.id}
             course={editing === "new" ? undefined : editing}
-            defaultUniversityId={universityId !== "all" ? universityId : undefined}
-            universities={state.universities}
-            courses={state.courses}
-            onSubmit={save}
+            defaultUniversityId={universityId || undefined}
+            defaultMajorId={majorId || undefined}
             onCancel={() => setEditing(null)}
+            onSaved={(saved) => {
+              const isNew = editing === "new"
+              setEditing(null)
+              if (viewing?.id === saved.id) setViewing(saved)
+              toast({ tone: "success", title: isNew ? "Course added" : "Course updated", description: `${saved.code} ${saved.name}` })
+            }}
           />
         ) : null}
       </FormDialog>
@@ -306,16 +294,10 @@ export function CoursesAdminPage() {
         title={`Delete ${deleting?.code}?`}
         description={
           deleting ? (
-            <>
-              <p>
-                {deleting.title} will be removed from {universities.get(deleting.universityId)?.name}. You can't undo this.
-              </p>
-              {dependentsOf(deleting).length ? (
-                <p className="mt-2">
-                  It's also removed as a requisite from {dependentsOf(deleting).map((c) => c.code).join(", ")}.
-                </p>
-              ) : null}
-            </>
+            <p>
+              {deleting.name} will be removed from {deleting.major.name} at {deleting.university.name}, and from the requisites
+              of other courses. You can&rsquo;t undo this. Courses used in student records or plans can&rsquo;t be deleted.
+            </p>
           ) : null
         }
         destructive
