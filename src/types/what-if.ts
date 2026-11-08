@@ -1,4 +1,4 @@
-/** Contract between the What-If page and whatever produces the analysis (mock today, AI later). */
+/** Response of `POST /api/me/what-if`. Labels are display strings and courses are referenced by code. */
 
 export type ScenarioKind = "fail" | "grade-change" | "retake" | "add" | "move-earlier" | "drop" | "swap"
 
@@ -25,7 +25,8 @@ export type ScenarioAnalysis = {
   kind: ScenarioKind
   headline: string
   summary: string
-  gpa: { label: string; current: number; scenario: number }
+  /** Null when nothing is graded yet; 0 is a real GPA. */
+  gpa: { label: string; current: number | null; scenario: number | null }
   credits: { label: string; current: number; scenario: number }
   graduation: { current: string; scenario: string; semestersDelta: number }
   planChanges: PlanChange[]
