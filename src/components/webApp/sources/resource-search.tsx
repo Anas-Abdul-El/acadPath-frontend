@@ -3,27 +3,29 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { Loader2, Search, SearchX, TriangleAlert } from "lucide-react"
 import { useForm } from "react-hook-form"
 
+import { errorMessage, isCancelled } from "@/api/errors"
+import { searchResources } from "@/api/resources"
+import type { LearningResourceDto, ResourceSearchDto } from "@/api/types"
 import { FormField } from "@/components/shared/form-field"
 import { PlatformIcon } from "@/components/webApp/sources/platform"
 import { ResourceCard } from "@/components/webApp/sources/resource-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { PLATFORMS, type LearningResource, type Platform } from "@/mock/sources/resources"
 import { pluralize } from "@/lib/files/format"
+import { PLATFORM_ORDER, PLATFORMS } from "@/lib/labels"
 import { resourceSearchSchema, type ResourceSearchValues } from "@/schemas/sources"
-import { searchResources, type SearchResult } from "@/simulation/sources/search"
 import { cn } from "@/lib/utils"
 
-const SUGGESTIONS = ["CS 3410", "Linear algebra", "SQL joins", "Hypothesis testing", "Machine learning"]
+const SUGGESTIONS = ["Recursion", "Linear algebra", "SQL joins", "Hypothesis testing", "Machine learning"]
 
 type State =
   | { status: "idle" }
   | { status: "loading"; query: string }
-  | { status: "done"; query: string; result: SearchResult }
-  | { status: "error"; values: ResourceSearchValues }
+  | { status: "done"; query: string; result: ResourceSearchDto }
+  | { status: "error"; values: ResourceSearchValues; message: string }
 
-export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResource) => void }) {
+export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResourceDto) => void }) {
   const [state, setState] = useState<State>({ status: "idle" })
   const abortRef = useRef<AbortController | null>(null)
 
@@ -34,7 +36,7 @@ export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResource
     formState: { errors },
   } = useForm<ResourceSearchValues>({
     resolver: zodResolver(resourceSearchSchema),
-    defaultValues: { query: "", goal: "", platforms: ["youtube", "udemy", "coursera"] },
+    defaultValues: { query: "", goal: "", platforms: [...PLATFORM_ORDER] },
   })
 
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -47,8 +49,9 @@ export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResource
     try {
       const result = await searchResources(values, controller.signal)
       setState({ status: "done", query: values.query, result })
-    } catch {
-      if (!controller.signal.aborted) setState({ status: "error", values })
+    } catch (err) {
+      if (!controller.signal.aborted && !isCancelled(err))
+        setState({ status: "error", values, message: errorMessage(err) })
     }
   }
 
@@ -90,7 +93,7 @@ export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResource
         <fieldset className="mt-4">
           <legend className="text-sm font-medium text-foreground">Platforms</legend>
           <div className="mt-2 flex flex-wrap gap-2">
-            {(Object.keys(PLATFORMS) as Platform[]).map((platform) => (
+            {PLATFORM_ORDER.map((platform) => (
               <label
                 key={platform}
                 className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-sm transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/40"
@@ -109,7 +112,7 @@ export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResource
         </fieldset>
 
         <div className="mt-5 flex flex-col-reverse gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-muted-foreground">Prototype: searches AcadPath's sample resource list, not the live platforms.</p>
+          <p className="text-xs text-muted-foreground">AI search across saved resources and the platforms you pick. It can take a few seconds.</p>
           <Button type="submit" size="xl" disabled={loading} className="shrink-0">
             {loading ? (
               <>
@@ -166,7 +169,7 @@ export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResource
           <div role="alert" className="flex flex-col items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="flex items-center gap-2 text-sm text-destructive">
               <TriangleAlert aria-hidden="true" className="size-4" />
-              The search didn't finish. Check your connection and try again.
+              The search didn&rsquo;t finish. {state.message}
             </p>
             <Button variant="outline" size="lg" onClick={() => void run(state.values)}>
               Try again
@@ -182,7 +185,7 @@ export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResource
                 {state.result.matchedCourse ? (
                   <>
                     {" "}
-                    · matched <span className="font-mono text-xs">{state.result.matchedCourse.code}</span> {state.result.matchedCourse.title}
+                    · matched <span className="font-mono text-xs">{state.result.matchedCourse.code}</span> {state.result.matchedCourse.name}
                   </>
                 ) : null}
               </p>
@@ -199,7 +202,7 @@ export function ResourceSearch({ onOpen }: { onOpen: (resource: LearningResource
               <SearchX aria-hidden="true" className="size-7 text-muted-foreground" />
               <p className="mt-3 text-sm font-medium text-foreground">No sources found for “{state.query}”</p>
               <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                Try a broader topic, a course code like CS 3110, or include more platforms.
+                Try a broader topic, a course code from your major, or include more platforms.
               </p>
             </div>
           )

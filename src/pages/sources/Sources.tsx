@@ -1,18 +1,26 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
+import { useRecommendations } from "@/api/academics"
+import type { LearningResourceDto } from "@/api/types"
 import { AppPageHeader } from "@/components/shared/page-header"
+import { QueryError, Skeleton } from "@/components/shared/query-state"
 import { FocusCourseGroup } from "@/components/webApp/sources/focus-course-group"
 import { ResourceDialog } from "@/components/webApp/sources/resource-dialog"
 import { ResourceSearch } from "@/components/webApp/sources/resource-search"
 import { NothingToShow, Subsection } from "@/components/webApp/sources/subsection"
-import type { LearningResource } from "@/mock/sources/resources"
 import { difficultFocusCourses, failedFocusCourses } from "@/lib/sources/recommendations"
 
-const failed = failedFocusCourses()
-const difficult = difficultFocusCourses()
-
 export function SourcesPage() {
-  const [open, setOpen] = useState<LearningResource | null>(null)
+  const [open, setOpen] = useState<LearningResourceDto | null>(null)
+  const recommendations = useRecommendations()
+  const failed = useMemo(
+    () => (recommendations.data ? failedFocusCourses(recommendations.data) : []),
+    [recommendations.data],
+  )
+  const difficult = useMemo(
+    () => (recommendations.data ? difficultFocusCourses(recommendations.data) : []),
+    [recommendations.data],
+  )
 
   return (
     <div className="space-y-10">
@@ -40,21 +48,36 @@ export function SourcesPage() {
           <p className="mt-1 text-sm text-muted-foreground">Based only on the courses you've failed or are finding difficult.</p>
         </div>
 
-        <Subsection title="Failed courses" description="Strengthen the foundations later courses build on.">
-          {failed.length ? (
-            failed.map((focus) => <FocusCourseGroup key={focus.course.code} focus={focus} onOpen={setOpen} />)
-          ) : (
-            <NothingToShow message="No failed courses on your record. If a course doesn't go to plan, resources for it will show up here." />
-          )}
-        </Subsection>
+        {recommendations.isPending ? (
+          <div role="status" aria-label="Loading recommendations" className="space-y-4">
+            <Skeleton className="h-64 rounded-xl" />
+            <Skeleton className="h-64 rounded-xl" />
+          </div>
+        ) : recommendations.error ? (
+          <QueryError
+            error={recommendations.error}
+            onRetry={() => recommendations.refetch()}
+            title="We couldn't load your recommendations"
+          />
+        ) : (
+          <>
+            <Subsection title="Failed courses" description="Strengthen the foundations later courses build on.">
+              {failed.length ? (
+                failed.map((focus) => <FocusCourseGroup key={focus.course.id} focus={focus} onOpen={setOpen} />)
+              ) : (
+                <NothingToShow message="No failed courses on your record. If a course doesn't go to plan, resources for it will show up here." />
+              )}
+            </Subsection>
 
-        <Subsection title="Courses you're finding difficult" description="Current courses where your standing is B+ or lower.">
-          {difficult.length ? (
-            difficult.map((focus) => <FocusCourseGroup key={focus.course.code} focus={focus} onOpen={setOpen} />)
-          ) : (
-            <NothingToShow message="All your current courses are going well — nothing flagged as difficult right now." />
-          )}
-        </Subsection>
+            <Subsection title="Courses you're finding difficult" description="Current courses where your expected grade is B+ or lower.">
+              {difficult.length ? (
+                difficult.map((focus) => <FocusCourseGroup key={focus.course.id} focus={focus} onOpen={setOpen} />)
+              ) : (
+                <NothingToShow message="All your current courses are going well — nothing flagged as difficult right now." />
+              )}
+            </Subsection>
+          </>
+        )}
       </section>
 
       <section id="find" aria-labelledby="find-title" className="space-y-5 border-t border-border pt-10">
