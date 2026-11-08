@@ -1,30 +1,33 @@
+import { useState } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { ArrowRight, Loader2 } from "lucide-react"
 import { useForm } from "react-hook-form"
-import { Link, useNavigate } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 
+import { useRegister } from "@/api/auth"
+import { applyFieldErrors, errorMessage, isApiError } from "@/api/errors"
 import { AuthHeading } from "@/components/auth/auth-heading"
-import { PrototypeNotice } from "@/components/auth/prototype-notice"
+import { FormAlert } from "@/components/shared/form-alert"
 import { FormField } from "@/components/shared/form-field"
 import { PasswordInput } from "@/components/auth/password-input"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { register as registerAccount } from "@/simulation/auth/mock-auth"
-import { signIn } from "@/store/slices/onboarding/onboarding-slice"
 import { ROUTES } from "@/lib/routes"
 import {
   PASSWORD_MIN_LENGTH,
   signUpSchema,
   type SignUpValues,
 } from "@/schemas/auth"
-import { useAppDispatch } from "@/store/hooks"
 
+/** After success, `RedirectIfAuthed` sends the new student to the first onboarding step. */
 export function SignUpPage() {
-  const navigate = useNavigate()
-  const dispatch = useAppDispatch()
+  const [params] = useSearchParams()
+  const registerAccount = useRegister()
+  const [formError, setFormError] = useState<string | null>(null)
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors, isSubmitting },
   } = useForm<SignUpValues>({
     resolver: zodResolver(signUpSchema),
@@ -33,9 +36,13 @@ export function SignUpPage() {
   })
 
   const onSubmit = async (values: SignUpValues) => {
-    const account = await registerAccount(values)
-    dispatch(signIn(account))
-    navigate(ROUTES.onboarding.university)
+    setFormError(null)
+    try {
+      await registerAccount.mutateAsync(values)
+    } catch (err) {
+      if (isApiError(err, 409)) setError("email", { type: "server", message: err.message })
+      else if (!applyFieldErrors(err, setError, ["name", "email", "password"])) setFormError(errorMessage(err))
+    }
   }
 
   return (
@@ -47,6 +54,8 @@ export function SignUpPage() {
       />
 
       <form noValidate onSubmit={handleSubmit(onSubmit)} className="mt-8 space-y-5">
+        {formError ? <FormAlert message={formError} /> : null}
+
         <FormField label="Full name" error={errors.name?.message}>
           {(control) => <Input {...control} {...register("name")} autoComplete="name" className="h-10" />}
         </FormField>
@@ -101,15 +110,10 @@ export function SignUpPage() {
 
       <p className="mt-6 text-sm text-muted-foreground">
         Already have an account?{" "}
-        <Link to={ROUTES.signIn} className="font-medium text-primary underline-offset-4 hover:underline">
+        <Link to={{ pathname: ROUTES.signIn, search: params.toString() }} className="font-medium text-primary underline-offset-4 hover:underline">
           Sign in
         </Link>
       </p>
-
-      <PrototypeNotice className="mt-8">
-        Registration is simulated — no account is created and nothing is sent to a server. Your name and
-        email are kept in this browser tab only.
-      </PrototypeNotice>
     </>
   )
 }
