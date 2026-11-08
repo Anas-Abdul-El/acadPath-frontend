@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { ArrowUp, RotateCcw, Square } from "lucide-react"
 
+import { useCurrentUser } from "@/api/me"
 import { AiBadge } from "@/components/shared/ai-badge"
 import { AdvisorEmptyState } from "@/components/webApp/advisor/advisor-empty-state"
 import { MessageBubble } from "@/components/webApp/advisor/message-bubble"
 import { Button } from "@/components/ui/button"
 import { resetChat, selectChatStatus, selectMessages, sendMessage, stopReply } from "@/store/slices/advisor-chat/advisor-chat-slice"
 import { initialsOf } from "@/lib/initials"
-import { selectAccount } from "@/store/slices/onboarding/onboarding-slice"
 import { CHAT_MESSAGE_MAX, chatMessageSchema } from "@/schemas/chat"
 import { cn } from "@/lib/utils"
 import { useAppDispatch, useAppSelector } from "@/store/hooks"
@@ -16,7 +16,7 @@ export function AdvisorPage() {
   const dispatch = useAppDispatch()
   const messages = useAppSelector(selectMessages)
   const status = useAppSelector(selectChatStatus)
-  const account = useAppSelector(selectAccount)
+  const { user } = useCurrentUser()
   const [draft, setDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -64,7 +64,7 @@ export function AdvisorPage() {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2.5">
               <h1 className="font-display text-2xl tracking-tight text-foreground sm:text-3xl">AI Advisor</h1>
-              <AiBadge>Simulated responses</AiBadge>
+              <AiBadge>Grounded in your record</AiBadge>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">Ask about your courses, GPA, prerequisites, or plan.</p>
           </div>
@@ -84,7 +84,7 @@ export function AdvisorPage() {
           ) : (
             <ol aria-label="Conversation" className="space-y-6">
               {messages.map((message) => (
-                <MessageBubble key={message.id} message={message} studentInitials={initialsOf(account?.name ?? "You")} />
+                <MessageBubble key={message.id} message={message} studentInitials={initialsOf(user.name)} />
               ))}
             </ol>
           )}
@@ -138,7 +138,7 @@ export function AdvisorPage() {
             </p>
           ) : (
             <p id="advisor-input-hint" className="mt-2 text-center text-[11px] leading-relaxed text-muted-foreground">
-              Prototype: answers are simulated from sample data, not a live AI model. Confirm decisions with your academic
+              Answers are AI-generated from your record and plan and can be wrong. Confirm decisions with your academic
               advisor.
             </p>
           )}

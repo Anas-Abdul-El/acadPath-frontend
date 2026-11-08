@@ -1,4 +1,4 @@
-import { Square } from "lucide-react"
+import { Square, TriangleAlert } from "lucide-react"
 
 import { MessageContent } from "@/components/webApp/advisor/message-content"
 import { LogoMark } from "@/components/shared/logo"
@@ -46,6 +46,12 @@ export function MessageBubble({ message, studentInitials }: { message: ChatMessa
         ) : (
           <>
             {message.content ? <MessageContent content={message.content} /> : null}
+            {message.error ? (
+              <p role="alert" className="mt-2 inline-flex items-start gap-1.5 text-sm text-destructive">
+                <TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+                {message.content ? `The reply was cut short. ${message.error}` : message.error}
+              </p>
+            ) : null}
             {message.stopped ? (
               <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Square aria-hidden="true" className="size-2.5 fill-current" />
