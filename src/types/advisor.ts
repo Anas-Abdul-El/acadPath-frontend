@@ -8,12 +8,11 @@ export type ChatMessage = {
   pending?: boolean
   /** True when the student stopped the reply before it finished. */
   stopped?: boolean
+  /** Why the reply failed, when it did (shown under whatever arrived before the failure). */
+  error?: string
 }
 
-/**
- * What the chat UI needs from an advisor backend. The mock implements it locally; a real
- * AI integration only has to provide the same streaming function.
- */
+/** What the chat UI needs from the advisor backend: a stream of text chunks for one reply. */
 export type AdvisorService = {
   streamReply: (history: ChatMessage[], signal: AbortSignal) => AsyncGenerator<string>
 }

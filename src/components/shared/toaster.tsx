@@ -10,7 +10,7 @@ const TONE = {
   info: { icon: Info, className: "text-primary" },
 }
 
-/** Renders the toasts queued with `useToast`. Mount once per layout that shows them. */
+/** Renders the toasts queued with `useToast`. Mounted once, in the root layout. */
 export function Toaster() {
   const toasts = useAppSelector(selectToasts)
   const dispatch = useAppDispatch()

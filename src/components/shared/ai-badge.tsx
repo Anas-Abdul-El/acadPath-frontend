@@ -2,7 +2,7 @@ import { Sparkles } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-/** Marks content produced (or simulated) by AI, consistently across pages. */
+/** Marks AI-generated content, consistently across pages. */
 export function AiBadge({ children, className }: { children: string; className?: string }) {
   return (
     <span
