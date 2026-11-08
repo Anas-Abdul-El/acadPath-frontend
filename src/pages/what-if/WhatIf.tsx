@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type BaseSyntheticEvent,
@@ -14,31 +15,63 @@ import {
 } from "lucide-react";
 import { useForm } from "react-hook-form";
 
+import { useMyCourses } from "@/api/academics";
+import { errorMessage, isCancelled } from "@/api/errors";
+import type { MyCourseDto } from "@/api/types";
+import { analyzeScenario } from "@/api/what-if";
 import { AppPageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScenarioLoading } from "@/components/webApp/whatIf/scenario-loading";
 import { ScenarioResult } from "@/components/webApp/whatIf/scenario-result";
 import { scenarioSchema, type ScenarioValues } from "@/schemas/scenario";
-import { analyzeScenario } from "@/simulation/what-if/mock-analyze";
 import type { ScenarioResult as ScenarioResultData } from "@/types/what-if";
 
-const EXAMPLES = [
-  "What if I fail CS 3110 this semester?",
-  "What if I retake MATH 2310 and get an A?",
+const GENERIC_EXAMPLES = [
   "What if I take an additional course next semester?",
-  "What if I take CS 4300 instead of CS 4820?",
-  "What if I take CS 4620 next semester?",
+  "What if I take a lighter load next semester?",
 ];
+
+/** Example scenarios built from the student's own courses, so every one of them is answerable. */
+function buildExamples(courses: MyCourseDto[]): string[] {
+  const first = (status: MyCourseDto["status"]) =>
+    courses.find((course) => course.status === status);
+  const inProgress = first("IN_PROGRESS");
+  const completed = courses.find(
+    (course) =>
+      course.status === "COMPLETED" &&
+      course.statusDetail.grade !== null &&
+      course.statusDetail.grade !== "A",
+  );
+  const planned = courses.filter((course) => course.status === "PLANNED");
+  const notTaken = first("NOT_TAKEN");
+
+  const examples = [
+    inProgress && `What if I fail ${inProgress.code} this semester?`,
+    completed && `What if I retake ${completed.code} and get an A?`,
+    planned[0] &&
+      notTaken &&
+      `What if I take ${notTaken.code} instead of ${planned[0].code}?`,
+    notTaken && `What if I take ${notTaken.code} next semester?`,
+    planned.at(-1) && `What if I drop ${planned.at(-1)?.code}?`,
+  ].filter((example): example is string => Boolean(example));
+
+  return [...examples, ...GENERIC_EXAMPLES].slice(0, 5);
+}
 
 type State =
   | { status: "idle" }
   | { status: "loading"; scenario: string }
   | { status: "done"; scenario: string; result: ScenarioResultData }
-  | { status: "error"; scenario: string };
+  | { status: "error"; scenario: string; message: string };
 
 export function WhatIfPage() {
   const [state, setState] = useState<State>({ status: "idle" });
+  const courses = useMyCourses();
+  const examples = useMemo(
+    () => buildExamples(courses.data ?? []),
+    [courses.data],
+  );
   const abortRef = useRef<AbortController | null>(null);
   const resultRef = useRef<HTMLDivElement>(null);
 
@@ -63,8 +96,9 @@ export function WhatIfPage() {
       const result = await analyzeScenario(scenario, controller.signal);
       setState({ status: "done", scenario, result });
       requestAnimationFrame(() => resultRef.current?.focus());
-    } catch {
-      if (!controller.signal.aborted) setState({ status: "error", scenario });
+    } catch (err) {
+      if (!controller.signal.aborted && !isCancelled(err))
+        setState({ status: "error", scenario, message: errorMessage(err) });
     }
   };
 
@@ -131,7 +165,7 @@ export function WhatIfPage() {
           <div>
             <p className="text-xs text-muted-foreground">Try an example</p>
             <ul className="mt-2 flex flex-wrap gap-1.5">
-              {EXAMPLES.map((example) => (
+              {examples.map((example) => (
                 <li key={example}>
                   <button
                     type="button"
@@ -191,7 +225,7 @@ export function WhatIfPage() {
 
         {state.status === "error" ? (
           <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            The analysis didn't finish. Please try again.
+            The analysis didn&rsquo;t finish. {state.message}
           </p>
         ) : null}
 

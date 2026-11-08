@@ -1,8 +1,9 @@
-import { ArrowRight, CircleMinus, CirclePlus, FlaskConical, MoveRight, RotateCcw, TriangleAlert } from "lucide-react"
+import { ArrowRight, CircleMinus, CirclePlus, MoveRight, RotateCcw, Sparkles, TriangleAlert } from "lucide-react"
 
 import { DashboardCard } from "@/components/shared/dashboard-card"
 import { ImpactTile } from "@/components/webApp/whatIf/impact-tile"
 import type { PlanChange, ScenarioAnalysis, SemesterLoad } from "@/types/what-if"
+import { formatGpa } from "@/lib/labels"
 import { cn } from "@/lib/utils"
 
 const signed = (value: number, digits = 0) =>
@@ -16,17 +17,20 @@ const CHANGE = {
 } satisfies Record<PlanChange["kind"], unknown>
 
 export function ScenarioResult({ analysis }: { analysis: ScenarioAnalysis }) {
-  const gpaDelta = analysis.gpa.scenario - analysis.gpa.current
+  const { current: gpaNow, scenario: gpaThen } = analysis.gpa
+  // Null means nothing graded yet; the delta only exists when both sides have a GPA.
+  const gpaDelta = gpaNow !== null && gpaThen !== null ? gpaThen - gpaNow : null
+  const gpaUnchanged = gpaDelta === null ? gpaNow === gpaThen : Math.abs(gpaDelta) < 0.005
   const creditDelta = analysis.credits.scenario - analysis.credits.current
   const semesterDelta = analysis.graduation.semestersDelta
 
   return (
     <div className="space-y-5">
       <p className="flex items-start gap-2 rounded-md border border-dashed border-highlight/70 bg-highlight/10 px-3.5 py-2.5 text-xs leading-relaxed text-highlight-foreground">
-        <FlaskConical aria-hidden="true" className="mt-px size-3.5 shrink-0" />
+        <Sparkles aria-hidden="true" className="mt-px size-3.5 shrink-0" />
         <span>
-          <span className="font-medium">Simulated estimate.</span> Produced by rule-based sample logic from your record and
-          the catalog — not an AI calculation, and not an official degree audit.
+          <span className="font-medium">AI estimate.</span> Based on your record, your current plan and the catalog.
+          Nothing is saved, and it isn&rsquo;t an official degree audit.
         </span>
       </p>
 
@@ -41,10 +45,10 @@ export function ScenarioResult({ analysis }: { analysis: ScenarioAnalysis }) {
       >
         <ImpactTile
           label="GPA impact"
-          current={analysis.gpa.current.toFixed(2)}
-          scenario={analysis.gpa.scenario.toFixed(2)}
-          delta={Math.abs(gpaDelta) < 0.005 ? "No change" : signed(gpaDelta, 2)}
-          effect={Math.abs(gpaDelta) < 0.005 ? "neutral" : gpaDelta > 0 ? "better" : "worse"}
+          current={formatGpa(gpaNow)}
+          scenario={formatGpa(gpaThen)}
+          delta={gpaUnchanged ? "No change" : gpaDelta === null ? "New GPA" : signed(gpaDelta, 2)}
+          effect={gpaUnchanged || gpaDelta === null ? "neutral" : gpaDelta > 0 ? "better" : "worse"}
           footnote={analysis.gpa.label}
         />
         <ImpactTile
@@ -129,7 +133,7 @@ export function ScenarioResult({ analysis }: { analysis: ScenarioAnalysis }) {
         </DashboardCard>
       </div>
 
-      <DashboardCard title="Side-by-side comparison" subtitle="Simulated estimates">
+      <DashboardCard title="Side-by-side comparison" subtitle="AI estimates">
         <div className="relative -mx-4 overflow-x-auto sm:-mx-5">
           <table className="w-full min-w-[20rem] text-left text-sm">
             <caption className="sr-only">Current plan compared with the scenario</caption>
