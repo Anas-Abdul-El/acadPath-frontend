@@ -1,21 +1,22 @@
 import { ResourceCard } from "@/components/webApp/sources/resource-card"
-import type { LearningResource } from "@/mock/sources/resources"
+import type { LearningResourceDto } from "@/api/types"
 import type { FocusCourse } from "@/lib/sources/recommendations"
 
 type FocusCourseGroupProps = {
   focus: FocusCourse
-  onOpen: (resource: LearningResource) => void
+  onOpen: (resource: LearningResourceDto) => void
 }
 
 /** One course the student needs help with, followed by the resources recommended for it. */
 export function FocusCourseGroup({ focus, onOpen }: FocusCourseGroupProps) {
-  const headingId = `focus-${focus.course.code.replace(/\s+/g, "-")}`
+  const headingId = `focus-${focus.course.id}`
   return (
     <section aria-labelledby={headingId} className="rounded-xl border border-border bg-card/50 p-4 sm:p-5">
       <div>
         <h4 id={headingId} className="text-base font-medium text-foreground">
-          <span className="font-mono text-sm text-muted-foreground">{focus.course.code}</span> {focus.course.title}
+          <span className="font-mono text-sm text-muted-foreground">{focus.course.code}</span> {focus.course.name}
         </h4>
+        {focus.detail ? <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{focus.detail}</p> : null}
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{focus.why}</p>
       </div>
 

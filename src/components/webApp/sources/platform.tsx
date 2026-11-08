@@ -1,23 +1,26 @@
 import { GraduationCap, MonitorPlay, Play, type LucideIcon } from "lucide-react"
 
-import { PLATFORMS, type Difficulty, type LearningResource, type Platform } from "@/mock/sources/resources"
+import type { LearningResourceDto, ResourceDifficulty, ResourcePlatform } from "@/api/types"
+import { DIFFICULTY_LABEL, PLATFORMS } from "@/lib/labels"
 import { cn } from "@/lib/utils"
+
+type Platform = ResourcePlatform
 
 /** Platform styling uses theme tokens, not brand colors, so it stays inside the design system. */
 const STYLE: Record<Platform, { icon: LucideIcon; badge: string; thumb: string; mark: string }> = {
-  youtube: {
+  YOUTUBE: {
     icon: Play,
     badge: "border-destructive/25 bg-destructive/8 text-destructive",
     thumb: "bg-destructive/6",
     mark: "bg-destructive text-white",
   },
-  udemy: {
+  UDEMY: {
     icon: MonitorPlay,
     badge: "border-highlight/60 bg-highlight/15 text-highlight-foreground",
     thumb: "bg-highlight/15",
     mark: "bg-highlight text-highlight-foreground",
   },
-  coursera: {
+  COURSERA: {
     icon: GraduationCap,
     badge: "border-primary/25 bg-primary/8 text-primary",
     thumb: "bg-primary/7",
@@ -41,25 +44,25 @@ export function PlatformIcon({ platform, className }: { platform: Platform; clas
 }
 
 /**
- * Typographic thumbnail. Real thumbnails would come from the platform's API; sample data has
- * none, so this shows the course, format, and platform instead of a stock image.
+ * Typographic thumbnail. Resources carry no images, so this shows the course, format, and
+ * platform instead of a stock image.
  */
 export function ResourceThumbnail({
   resource,
   courseCode,
   className,
 }: {
-  resource: LearningResource
+  resource: LearningResourceDto
   courseCode?: string
   className?: string
 }) {
   const { icon: Icon, thumb, mark } = STYLE[resource.platform]
-  const code = courseCode ?? resource.courseCodes[0]
+  const code = courseCode ?? resource.courses[0]?.code ?? resource.topics[0] ?? PLATFORMS[resource.platform].label
   return (
     <div aria-hidden="true" className={cn("relative flex aspect-[16/7] flex-col justify-between overflow-hidden bg-card p-3.5", className)}>
       <span className={cn("absolute inset-0", thumb)} />
       <div className="relative flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{resource.format}</span>
+        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{resource.format ?? "Resource"}</span>
         <span className={cn("grid size-7 place-items-center rounded-full", mark)}>
           <Icon className="size-3.5" />
         </span>
@@ -69,9 +72,9 @@ export function ResourceThumbnail({
   )
 }
 
-const LEVEL: Record<Difficulty, number> = { Beginner: 1, Intermediate: 2, Advanced: 3 }
+const LEVEL: Record<ResourceDifficulty, number> = { BEGINNER: 1, INTERMEDIATE: 2, ADVANCED: 3 }
 
-export function DifficultyLabel({ difficulty }: { difficulty: Difficulty }) {
+export function DifficultyLabel({ difficulty }: { difficulty: ResourceDifficulty }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span aria-hidden="true" className="flex items-end gap-px">
@@ -83,7 +86,7 @@ export function DifficultyLabel({ difficulty }: { difficulty: Difficulty }) {
           />
         ))}
       </span>
-      {difficulty}
+      {DIFFICULTY_LABEL[difficulty]}
     </span>
   )
 }

@@ -9,7 +9,7 @@ export const resourceSearchSchema = z.object({
     .max(100, "Keep the search under 100 characters."),
   goal: z.string().trim().max(300, "Keep this under 300 characters."),
   platforms: z
-    .array(z.enum(["youtube", "udemy", "coursera"]))
+    .array(z.enum(["YOUTUBE", "UDEMY", "COURSERA"]))
     .min(1, "Choose at least one platform."),
 });
 
