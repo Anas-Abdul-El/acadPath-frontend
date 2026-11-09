@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query"
 
-import { getData } from "@/api/client"
+import { api, getData, LONG_TIMEOUT } from "@/api/client"
 import { queryKeys } from "@/api/query-keys"
 import type {
   AcademicRecordDto,
+  DataEnvelope,
   AcademicRecordsQuery,
   AcademicSummaryDto,
   CourseDetailDto,
@@ -41,9 +42,16 @@ export function useCourse(courseId: string | undefined) {
   })
 }
 
+/** The first load can ask the AI to find resources for courses that have none, so it can be slow. */
 export function useRecommendations() {
   return useQuery({
     queryKey: queryKeys.recommendations,
-    queryFn: ({ signal }) => getData<RecommendationsDto>("/me/recommendations", undefined, signal),
+    queryFn: async ({ signal }) => {
+      const { data } = await api.get<DataEnvelope<RecommendationsDto>>("/me/recommendations", {
+        signal,
+        timeout: LONG_TIMEOUT,
+      })
+      return data.data
+    },
   })
 }

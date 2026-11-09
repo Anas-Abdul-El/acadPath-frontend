@@ -127,27 +127,32 @@ export function UniversityDetails({ universityId }: { universityId: string }) {
       <DetailSection title={`Catalog sources (${university.sources.length})`}>
         {university.sources.length ? (
           <ul className="divide-y divide-border rounded-lg border border-border bg-card text-sm">
-            {university.sources.map((source) => (
-              <li key={source.id} className="px-4 py-2.5">
-                <div className="flex items-start justify-between gap-3">
-                  <p className="min-w-0 truncate text-foreground" title={source.title}>
-                    {source.url ? (
-                      <a href={source.url} target="_blank" rel="noreferrer" className="hover:text-primary hover:underline">
-                        {source.title}
-                      </a>
-                    ) : (
-                      source.title
-                    )}
+            {university.sources.map((source) => {
+              const label = source.title ?? source.url
+              // Uploaded files are stored as "<userId>/<fileName>", not a web address.
+              const isWebPage = /^https?:\/\//.test(source.url)
+              return (
+                <li key={source.id} className="px-4 py-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="min-w-0 truncate text-foreground" title={label}>
+                      {isWebPage ? (
+                        <a href={source.url} target="_blank" rel="noreferrer" className="hover:text-primary hover:underline">
+                          {label}
+                        </a>
+                      ) : (
+                        label
+                      )}
+                    </p>
+                    <StatusBadge tone={PROCESSING_STATUS_TONE[source.status]}>{PROCESSING_STATUS_LABEL[source.status]}</StatusBadge>
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {source.sourceType} · added {formatDate(source.createdAt)}
+                    {source.lastProcessedAt ? ` · processed ${formatDate(source.lastProcessedAt)}` : ""}
                   </p>
-                  <StatusBadge tone={PROCESSING_STATUS_TONE[source.status]}>{PROCESSING_STATUS_LABEL[source.status]}</StatusBadge>
-                </div>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {source.sourceType} · added {formatDate(source.createdAt)}
-                  {source.lastProcessedAt ? ` · processed ${formatDate(source.lastProcessedAt)}` : ""}
-                </p>
-                {source.errorMessage ? <p className="mt-1 text-xs text-destructive">{source.errorMessage}</p> : null}
-              </li>
-            ))}
+                  {source.errorMessage ? <p className="mt-1 text-xs text-destructive">{source.errorMessage}</p> : null}
+                </li>
+              )
+            })}
           </ul>
         ) : (
           <p className="rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
