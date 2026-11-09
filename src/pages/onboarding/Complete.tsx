@@ -51,7 +51,7 @@ export function CompletePage() {
 
   const universityDocsSummary = uploadedSources
     ? sources.data
-      ? `${pluralize(sources.data.length, "source")} on file`
+      ? `${pluralize(sources.data.length, "catalog source")} for your university`
       : "Uploaded"
     : "Not needed — we already had your catalog";
 

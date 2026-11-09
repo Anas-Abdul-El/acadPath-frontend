@@ -184,7 +184,7 @@ function OverviewContent({
 
   const description = [
     currentTerm ? termLabel(currentTerm) : null,
-    majorLabel(summary.student.major),
+    summary.student.major ? majorLabel(summary.student.major) : null,
   ]
     .filter(Boolean)
     .join(" · ");
