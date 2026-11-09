@@ -1,13 +1,17 @@
-# AcadPath API Contract (frontend → backend)
+# AcadPath API Contract
 
-The routes the frontend needs from the backend, with their request and response shapes.
+The routes the backend (`acadPath-backend`) exposes, with their request and response shapes, as implemented today.
 
-These shapes come from two places:
+This file mirrors the backend code. When the two disagree, the backend is right and this file should be updated. The shapes come from:
 
-- The backend contract that already exists: the `/api/auth/*` routes covered by `backend/test/auth/*`, the error format in `backend/src/middlewares/errorHandler.ts`, and the enums in `backend/prisma/schema.prisma`.
-- The data that frontend pages already render today from mocks and simulations (`src/mock/*`, `src/simulation/*`, `src/types/*`, `src/schemas/*`).
+- the routes in `src/routes/*.route.ts`
+- the request validation in `src/schemas/*.schema.ts`
+- the response types in `src/types/*.dto.d.ts`
+- the behavior and error messages in `src/services/**`
+- the error format in `src/middlewares/errorHandler.ts` and `src/libs/appErr.ts`
+- the enums in `prisma/schema.prisma`
 
-Status legend: **EXISTS**: implemented or covered by backend tests · **NEEDED**: a current screen depends on it · **LATER**: needed once a planned screen exists.
+Every route listed here is implemented.
 
 ---
 
@@ -15,15 +19,19 @@ Status legend: **EXISTS**: implemented or covered by backend tests · **NEEDED**
 
 ### Base URL and transport
 
-- Every route is prefixed with `/api`.
-- Request and response bodies are JSON (`Content-Type: application/json`) unless a route says `multipart/form-data` or `text/event-stream`.
-- The refresh cookie is `httpOnly`, `SameSite=Strict` and scoped to `Path=/api/auth`. In development the frontend calls the API through the Vite proxy (`/api → backend`) so the cookie is first-party, and axios uses `withCredentials: true`.
+- Every route is prefixed with `/api`. The frontend reads the base URL from `VITE_API_URL` (default `http://localhost:3000/api`).
+- The frontend calls the API directly, cross-origin, with axios `withCredentials: true`. There is no Vite proxy.
+- CORS allows only the origins listed in the backend's `CORS_ORIGIN` (comma-separated). It defaults to `http://localhost:5173` outside production and is required in production. Credentials are allowed. The allowed methods are `GET, POST, PUT, PATCH, DELETE`, and the allowed request headers are `Content-Type` and `Authorization`. The headers `RateLimit`, `RateLimit-Policy` and `Retry-After` are exposed to the frontend.
+- Request and response bodies are JSON (`Content-Type: application/json`) unless a route says `multipart/form-data` or `text/event-stream`. JSON bodies are limited to 100 kB.
+- An unknown route returns `404` `"Route not found"`.
 
 ### Authentication
 
 - Protected routes need the header `Authorization: Bearer <accessToken>`. The access token is valid for 1 hour.
+- The refresh token is a cookie named `refreshToken`: `HttpOnly`, `SameSite=Strict`, `Path=/api/auth`, `Secure` in production, with a 7-day `Max-Age`. `localhost:5173` and `localhost:3000` count as the same site, so the cookie works in development.
 - When a request returns `401`, the frontend calls `POST /api/auth/refresh` once and retries. If the refresh also returns `401`, it sends the user to `/sign-in`.
-- `🔒 Student` means any signed-in user with `role = STUDENT`. `🔒 Admin` means `role = ADMIN`. A user with the wrong role gets `403`.
+- `🔒 Student` means a signed-in user with `role = STUDENT`. `🔒 Admin` means `role = ADMIN`. `🔒 any role` means any signed-in user. A user with the wrong role gets `403` `"You don't have permission to do this"`.
+- A missing or malformed header returns `401` `"Missing or malformed access token"`. A bad or expired token returns `401` `"Invalid or expired token"`.
 - Routes under `/api/me/*` only ever act on the caller's own data. They never take a student id.
 
 ### Success envelope
@@ -32,36 +40,54 @@ Status legend: **EXISTS**: implemented or covered by backend tests · **NEEDED**
 // single resource or action result
 { "data": { ... } }
 
-// paginated list
+// paginated list (admin)
 { "data": [ ... ], "meta": { "page": 1, "pageSize": 20, "total": 134 } }
 ```
 
 `204 No Content` responses have no body.
 
-### Error envelope (already implemented)
+### Error envelope
 
 ```jsonc
 {
   "error": {
     "message": "Validation failed",
-    // only for 400 validation errors
-    "details": [{ "path": "email", "message": "Enter a valid email address" }]
+    // only when the request failed schema validation
+    "details": [{ "path": "email", "message": "Invalid Email" }]
   }
 }
 ```
 
 | Status | When |
 |---|---|
-| 400 | Validation failed, or malformed JSON |
-| 401 | Missing, invalid or expired token; wrong credentials |
+| 400 | Validation failed (`"Validation failed"` with `details`), malformed JSON, too many files |
+| 401 | Missing, invalid or expired token; wrong credentials; the user no longer exists |
 | 403 | Signed in, but the role isn't allowed |
-| 404 | Resource not found, or not owned by the caller |
-| 409 | Duplicate, such as an email already registered or a course code already used in a major |
-| 413 | Upload too large |
-| 415 | Unsupported file type |
-| 422 | Valid input that can't be processed, such as "no major selected yet" |
-| 429 | Rate limited (auth and AI routes) |
-| 5xx | Server or AI provider failure (`{ "error": { "message": "Internal server error" } }`) |
+| 404 | Resource not found, or not owned by the caller; unknown route |
+| 409 | Duplicate, or a delete blocked because student records use the data |
+| 413 | An uploaded file is over 25 MB, or the files are over 150 MB in total |
+| 415 | An uploaded file isn't a PDF, PNG, JPEG or WebP |
+| 422 | Valid input that can't be processed yet, such as "Select your major first" |
+| 429 | Rate limited (see below) |
+| 500 | Unexpected server error: `{ "error": { "message": "Internal server error" } }` |
+| 502 | The AI provider failed (`"The AI provider failed, try again later"`) or returned unusable output (`"AI returned an invalid …"`) |
+
+Validation details:
+
+- Request bodies are trimmed and normalized as described per route. Unknown fields are dropped, except on `PATCH` bodies, which reject unknown fields with `400`.
+- `PATCH` bodies need at least one field, otherwise `400` `"Send at least one field to update"`.
+- An invalid UUID in a route param returns `400`.
+
+### Rate limits
+
+All windows are 15 minutes. A `429` uses the normal error envelope.
+
+| Limiter | Applies to | Limit | Key | Message |
+|---|---|---|---|---|
+| Global | Every route except the two polled routes | 100 requests | IP | `"Too many requests, try again later"` |
+| Auth | `/api/auth/*` | 10 **failed** requests (4xx/5xx) | IP | `"Too many attempts, try again later"` |
+| AI | `POST /me/study-plan/generate`, `/me/what-if`, `/me/advisor/chat`, `/resources/search`, `/quizzes` | 30 requests | user | `"Too many AI requests, try again later"` |
+| Poll | `GET /me/documents`, `GET /me/university/sources` | 600 requests | user | `"Too many requests, try again later"` |
 
 ### Pagination and list query params
 
@@ -71,14 +97,15 @@ Admin list routes accept these query params:
 |---|---|---|---|
 | `page` | int ≥ 1 | `1` | |
 | `pageSize` | int 1–100 | `20` | |
-| `q` | string | — | Case-insensitive search. Each route lists the fields it searches. |
+| `q` | string | — | Trimmed. An empty value is ignored. Case-insensitive "contains" search; each route lists the fields it searches. |
 
 ### Values
 
 - IDs are UUID strings.
 - Dates are ISO 8601 strings in UTC (`"2026-10-23T09:14:00.000Z"`).
-- Nullable fields are always present and set to `null`. They're never left out.
+- Nullable fields are always present and set to `null`. They're never left out. The exceptions are the optional `from` / `to` fields of a what-if plan change.
 - Enums use the Prisma names exactly. The frontend maps them to display labels.
+- Terms are ordered SPRING → SUMMER → FALL within a year.
 
 ### Shared enums
 
@@ -101,7 +128,10 @@ type ResourceDifficulty = "BEGINNER" | "INTERMEDIATE" | "ADVANCED"
 // Computed by the API, not stored
 type StudentCourseStatus = "COMPLETED" | "FAILED" | "IN_PROGRESS" | "PLANNED" | "NOT_TAKEN"
 type CatalogStatus = "AVAILABLE" | "PROCESSING" | "UNAVAILABLE"
+type StudentStage = "PROCESSED" | "UPLOADED" | "NONE"
 ```
+
+Grade points used for every GPA: A 4.0, A− 3.7, B+ 3.3, B 3.0, B− 2.7, C+ 2.3, C 2.0, C− 1.7, D+ 1.3, D 1.0, F 0.0. GPAs are credit-weighted and rounded to 2 decimals.
 
 Frontend value mappings:
 
@@ -112,7 +142,7 @@ Frontend value mappings:
 | Category `"major-requirement"` | `MAJOR_REQUIREMENT` |
 | Platform `"youtube"` | `YOUTUBE` |
 | Course `title` | `name` |
-| Term label `"Fall 2026"` / `"F26"` | `{ "term": "FALL", "year": 2026 }`. The frontend builds the label. |
+| Term label `"Fall 2026"` / `"F26"` | `{ "term": "FALL", "year": 2026 }`. The frontend builds the label (except in what-if results, which already contain labels). |
 
 ### Shared DTOs
 
@@ -152,11 +182,20 @@ type CourseDto = CourseSummaryDto & {
   majorId: string
   description: string | null
   offeredTerms: Term[]
-  prerequisites: CourseRefDto[]
-  corequisites: CourseRefDto[]
+  prerequisites: CourseRefDto[] // ordered by code
+  corequisites: CourseRefDto[]  // ordered by code
 }
 
-type TermRefDto = { term: Term; year: number }
+type TermDto = { term: Term; year: number }
+
+type StudentStatusDto = {
+  status: StudentCourseStatus
+  statusDetail: {
+    grade: LetterGrade | null // COMPLETED / FAILED
+    term: Term | null         // when it was or will be taken
+    year: number | null
+  }
+}
 
 type LearningResourceDto = {
   id: string
@@ -169,18 +208,26 @@ type LearningResourceDto = {
   duration: string | null // "6 hours", "4 weeks"
   difficulty: ResourceDifficulty | null
   topics: string[]
-  verified: boolean
-  courses: CourseRefDto[]
+  verified: boolean // false for resources the AI found
+  courses: CourseRefDto[] // ordered by code
 }
 ```
+
+How a course's `StudentStatusDto` is computed (used by `/me/courses`, `/courses/:courseId` and what-if):
+
+1. If the student has a `COMPLETED` record for it → `COMPLETED`, otherwise an `IN_PROGRESS` record → `IN_PROGRESS`, otherwise a `FAILED` record → `FAILED`. The detail comes from the most recent record with that status.
+2. Otherwise, if it's `PLANNED` in the latest study plan → `PLANNED`, with the earliest planned semester and `grade: null`.
+3. Otherwise → `NOT_TAKEN`, with every detail field `null`.
 
 ---
 
 ## 1. Auth
 
-### `POST /api/auth/signin` (register): EXISTS · public
+All auth routes use the auth rate limiter.
 
-Creates a **student** account and starts a session. Any `role` the client sends is ignored. (Despite the name, this route creates the account; `/login` signs in.)
+### `POST /api/auth/signin` (register) · public
+
+Creates a **student** account and starts a session. Any `role` the client sends is dropped; admins are promoted with the backend's `pnpm make-admin` script. (Despite the name, this route creates the account; `/login` signs in.)
 
 The year of study isn't part of sign-up. The student picks it later, on the onboarding Transcript step (`PUT /api/me/year-of-study`).
 
@@ -189,14 +236,16 @@ The year of study isn't part of sign-up. The student picks it later, on the onbo
 ```jsonc
 {
   "name": "Maya Chen",              // trimmed, non-empty
-  "email": "maya.chen@umich.edu",   // trimmed, lowercased
-  "password": "atlas2026"           // 8+ characters, ≤ 72 bytes UTF-8 (frontend also requires a letter and a digit)
+  "email": "maya.chen@umich.edu",   // trimmed, lowercased, valid email
+  "password": "atlas2026"           // 8+ characters with at least one digit; ≤ 72 bytes UTF-8
 }
 ```
 
+Validation messages: `"Name is required"`, `"Email is required"`, `"Invalid Email"`, `"Password must be at least 8 characters and contain a number"`, `"Password is too long"`.
+
 **Response `201`**
 
-- Header: `Set-Cookie: refreshToken=…; HttpOnly; SameSite=Strict; Path=/api/auth`
+- Header: `Set-Cookie: refreshToken=…; HttpOnly; SameSite=Strict; Path=/api/auth; Max-Age=604800`
 
 ```jsonc
 {
@@ -207,11 +256,11 @@ The year of study isn't part of sign-up. The student picks it later, on the onbo
 }
 ```
 
-**Errors:** `400` (validation, with `details`) · `409` "Email is already registered" · `429`
+**Errors:** `400` · `409` "Email is already registered" · `429`
 
 ---
 
-### `POST /api/auth/login`: EXISTS · public
+### `POST /api/auth/login` · public
 
 **Request body**
 
@@ -219,7 +268,7 @@ The year of study isn't part of sign-up. The student picks it later, on the onbo
 { "email": "maya.chen@umich.edu", "password": "atlas2026" }
 ```
 
-Only presence is checked here; the strength rules belong to registration.
+The email is trimmed, lowercased and must be a valid email. The password is only checked for presence (`"Password is required"`); the strength rules belong to registration.
 
 **Response `200`:** same body and cookie as `/signin`.
 
@@ -227,9 +276,9 @@ Only presence is checked here; the strength rules belong to registration.
 
 ---
 
-### `POST /api/auth/refresh`: EXISTS · cookie
+### `POST /api/auth/refresh` · cookie
 
-Rotates the session.
+Rotates the session: the old refresh token stops working.
 
 **Request:** no body; the `refreshToken` cookie is required.
 
@@ -239,11 +288,11 @@ Rotates the session.
 { "data": { "accessToken": "eyJhbGciOi..." } }
 ```
 
-**Errors:** `401` when the cookie is missing, invalid, expired, revoked or reused.
+**Errors:** `401` when the cookie is missing or not shaped like a JWT (`"Validation failed"` with `details`), or invalid, expired, revoked or reused (`"Invalid or expired token"`) · `429`
 
 ---
 
-### `POST /api/auth/logout`: EXISTS · cookie
+### `POST /api/auth/logout` · cookie
 
 Revokes the session and clears the cookie.
 
@@ -255,57 +304,64 @@ Revokes the session and clears the cookie.
 
 ## 2. Current user and onboarding
 
-### `GET /api/me`: NEEDED · 🔒 any role
+### `GET /api/me` · 🔒 any role
 
 Loads the signed-in user when the app starts. The frontend uses it to:
 
 - redirect by role (`/app` or `/admin`)
-- resume onboarding at the right step after a refresh (today that progress is kept only in memory and sessionStorage)
+- resume onboarding at the right step after a refresh
 - fill the sidebar and top bar
 
 **Response `200`**
 
-```jsonc
-{
-  "data": {
-    "user": UserDto,
-    // null for admins
-    "profile": {
-      "university": UniversityDto | null,
-      "major": MajorDto | null,
-      "yearOfStudy": YearOfStudy | null,
-      "onboardingCompletedAt": "2026-10-20T18:02:11.000Z" | null
-    } | null,
-    // null for admins
-    "onboarding": {
-      "universitySelected": true,
-      "catalogStatus": CatalogStatus | null,   // null until a university is selected
-      "universityDocumentsUploaded": false,    // the student uploaded ≥ 1 catalog source
-      "yearOfStudySelected": false,            // profile.yearOfStudy !== null
-      "transcriptRequired": true,              // false only when yearOfStudy = NEW_STUDENT
-      "transcriptUploaded": false,             // ≥ 1 StudentDocument of type TRANSCRIPT
-      "completed": false                       // onboardingCompletedAt !== null
-    } | null
-  }
+```ts
+type MeData = {
+  user: UserDto
+  // null for admins
+  profile: {
+    university: UniversityDto | null
+    major: MajorDto | null
+    yearOfStudy: YearOfStudy | null
+    onboardingCompletedAt: string | null
+  } | null
+  // null for admins
+  onboarding: {
+    universitySelected: boolean         // profile.university !== null
+    catalogStatus: CatalogStatus | null // null until a university is selected
+    universityDocumentsUploaded: boolean // the student uploaded ≥ 1 catalog source for this university
+    yearOfStudySelected: boolean        // profile.yearOfStudy !== null
+    transcriptRequired: boolean         // false only when yearOfStudy = NEW_STUDENT (true while it's null)
+    transcriptUploaded: boolean         // ≥ 1 StudentDocument of type TRANSCRIPT
+    completed: boolean                  // onboardingCompletedAt !== null
+  } | null
 }
 ```
 
-**Errors:** `401`
+```jsonc
+{ "data": MeData }
+```
+
+`catalogStatus` is derived from the university's catalog sources:
+
+- `AVAILABLE` when at least one source is `COMPLETED`
+- `PROCESSING` when none is completed but at least one is `PENDING` or `PROCESSING`
+- `UNAVAILABLE` otherwise, including when there are no sources
+
+**Errors:** `401` (including `"User not found"` when the account no longer exists)
 
 ---
 
-### `PUT /api/me/university`: NEEDED · 🔒 Student
+### `PUT /api/me/university` · 🔒 Student
 
-Onboarding **University** step (`UniversityFinder.tsx`). It replaces the mocked `checkCatalogAvailability()`. The backend:
+Onboarding **University** step (`UniversityFinder.tsx`). The backend:
 
-1. finds the university by name and country (normalizing case, accents and a leading "The", and matching `shortName`), or creates it
-2. finds or creates the major under that university
-3. saves both on the student's profile
-4. reports whether a usable catalog already exists
+1. finds the university by name and country, ignoring case, accents, repeated spaces and a leading "The", and also matching `shortName`
+2. if the university exists and already has a major with that name, saves both on the student's profile and returns
+3. otherwise creates the university if needed, then **asks the AI to find catalog pages on the web, reads them and extracts the major and its courses** (saved with `source = AI_EXTRACTED`), then saves the selection
 
-If the student picks a different university than before, the old major is cleared.
+Step 3 is synchronous and can take a long time, so the frontend shows a loading state and uses a long timeout. The saved major's name may come from the catalog rather than what was typed. Selecting a university replaces both the previous university and major.
 
-**Request body:** the same rules as `universityStepSchema`.
+**Request body:** the same rules as the frontend's `universityStepSchema`. Every field is trimmed.
 
 ```jsonc
 {
@@ -316,83 +372,96 @@ If the student picks a different university than before, the old major is cleare
 }
 ```
 
+"Letters only" means letters, accents, spaces and `. ' ’ ( ) -`.
+
 **Response `200`**
 
-```jsonc
-{
-  "data": {
-    "university": UniversityDto,     // its name is the official one, which may differ from what was typed ("UBC")
-    "major": MajorDto,
-    "catalog": {
-      "status": "AVAILABLE",         // CatalogStatus
-      "title": "LSA Course Guide 2025–2026" | null,  // title of the newest completed source
-      "source": "lsa.umich.edu" | null,             // hostname of that source
-      "courseCount": 4180,           // courses across the university
-      "majorCount": 112
-    },
-    "replaced": false                // true if this changed a previously selected university
+```ts
+type UniversityData = {
+  university: UniversityDto // its name is the stored one, which may differ from what was typed ("UBC")
+  major: MajorDto | null    // set in practice
+  catalog: {
+    status: CatalogStatus
+    title: string | null    // title of the newest completed source
+    source: string | null   // hostname of that source, e.g. "lsa.umich.edu"
+    courseCount: number     // courses across the university
+    majorCount: number
   }
 }
 ```
 
+```jsonc
+{ "data": { ...UniversityData, "replaced": false } }  // replaced: true if a different university was selected before
+```
+
 `catalog.status` decides the next screen: `AVAILABLE` skips university documents, while `UNAVAILABLE` and `PROCESSING` ask for documents.
 
-**Errors:** `400` · `401` · `403` (admin)
+**Errors:** `400` · `401` · `403` (admin) · `502` (the AI couldn't find or read the catalog)
 
 ---
 
-### `POST /api/me/university/sources`: NEEDED · 🔒 Student
+### `POST /api/me/university/sources` · 🔒 Student
 
-Onboarding **University documents** step. Uploads catalog or curriculum files for the student's university, creating `CourseMaterialSource` rows that the backend then processes asynchronously.
+Onboarding **University documents** step. Uploads catalog or curriculum files for the student's university and major. The upload is **processed synchronously**: PDF text and images are read by the AI, the major's courses are extracted and saved, and each file is stored as a completed `CourseMaterialSource` uploaded by the student. The request is slow.
 
 **Request:** `multipart/form-data`
 
 | Field | Type | Rules |
 |---|---|---|
-| `files` | File, repeated | 1–20 files; PDF, PNG, JPEG or WEBP; non-empty; ≤ 25 MB each; ≤ 150 MB total. The type is checked from the file's content, not only its extension. |
+| `files` | File, repeated | 1–20 files; PDF, PNG, JPEG or WebP; non-empty; ≤ 25 MB each; ≤ 150 MB total |
 
-**Response `201`**
+The file type is checked twice: first from the declared MIME type (`415` "Only PDF, PNG, JPEG or WebP files are allowed"), then from the file's bytes (`400` "File must be a PDF, PNG, JPEG or WebP").
+
+**Response `200`:** the updated university, without `replaced`.
 
 ```jsonc
-{
-  "data": [
-    {
-      "id": "9a1c…",
-      "title": "cs-curriculum-2025.pdf" | null,
-      "sourceType": "PDF",              // SourceType
-      "status": "PENDING",              // ProcessingStatus
-      "errorMessage": null,
-      "createdAt": "2026-10-23T09:14:00.000Z"
-    }
-  ]
-}
+{ "data": UniversityData }
 ```
 
-**Errors:** `400` · `401` · `413` · `415` · `422` "Select your university first"
+**Errors**
+
+- `400` (validation, including more than 20 files)
+- `401` · `403` (admin)
+- `413` · `415`
+- `422` "Select your university first" (no university or no major selected yet), "Could not find Computer Science in the uploaded files", "Could not read transcript.pdf"
+- `502`
 
 ---
 
-### `GET /api/me/university/sources`: NEEDED · 🔒 Student
+### `GET /api/me/university/sources` · 🔒 Student · poll limiter
 
-Lists the processing status of the student's university sources. The frontend polls it every few seconds while any source is `PENDING` or `PROCESSING`.
+Lists **all** catalog sources of the student's university (not only the ones this student uploaded), newest first.
 
-**Response `200`:** the same item shape as the upload response.
+**Response `200`**
 
-```jsonc
-{ "data": [ { "id", "title", "sourceType", "status", "errorMessage", "createdAt" } ] }
+```ts
+type UniversitySourceDto = {
+  id: string
+  title: string | null       // the file name for uploads
+  sourceType: SourceType
+  status: ProcessingStatus
+  errorMessage: string | null
+  createdAt: string
+}
 ```
 
-> Note: `CourseMaterialSource` has no `status` column. The backend derives it:
+```jsonc
+{ "data": UniversitySourceDto[] }
+```
+
+> `CourseMaterialSource` has no `status` column. The backend derives it:
 > - `FAILED` when `errorMessage` is set
 > - `COMPLETED` when `lastProcessedAt` is set
 > - `PROCESSING` when `lastFetchedAt` is set
 > - `PENDING` otherwise
 >
-> A real column would be simpler.
+> Sources saved today are always `COMPLETED`, because extraction runs during the request.
+
+**Errors:** `401` · `403` · `422` "Select your university first" · `429`
 
 ---
 
-### `PUT /api/me/year-of-study`: NEEDED · 🔒 Student
+### `PUT /api/me/year-of-study` · 🔒 Student
 
 Onboarding **Transcript** step (`Transcript.tsx`, the "Year & transcript" tab). It saves the year the student selects there. The frontend calls it when the step is submitted, before any upload. A `NEW_STUDENT` has no courses on record, so for them this is the whole step and no transcript is uploaded.
 
@@ -401,7 +470,7 @@ The student can come back and change the year. Moving to or from `NEW_STUDENT` o
 **Request body**
 
 ```jsonc
-{ "yearOfStudy": "YEAR_2" }   // YearOfStudy
+{ "yearOfStudy": "YEAR_2" }   // YearOfStudy ("Select a valid year of study")
 ```
 
 **Response `200`**
@@ -419,44 +488,66 @@ The student can come back and change the year. Moving to or from `NEW_STUDENT` o
 
 ---
 
-### `POST /api/me/documents`: NEEDED · 🔒 Student
+### `PATCH /api/me/profile` · 🔒 Student
 
-Onboarding **Transcript** step, for students who aren't `NEW_STUDENT`. Uploads academic documents that the backend extracts asynchronously into `AcademicRecord` rows.
+Updates profile fields after onboarding. Today the only field is the year of study.
+
+**Request body:** unknown fields are rejected, and at least one field is required.
+
+```jsonc
+{ "yearOfStudy": "YEAR_3" }   // optional YearOfStudy
+```
+
+**Response `200`:** the same `data` as `GET /api/me`.
+
+**Errors:** `400` · `401` · `403` (admin)
+
+---
+
+### `POST /api/me/documents` · 🔒 Student
+
+Onboarding **Transcript** step, for students who aren't `NEW_STUDENT`. Uploads academic documents. The upload is **processed synchronously**: the AI reads the files, the extracted courses are matched by code to the student's major, the files are stored, and the documents are saved as `COMPLETED`. The request is slow.
+
+> ⚠️ A successful upload **replaces all of the student's academic records** with the ones extracted from this upload. Records for courses that aren't in the major are dropped.
 
 **Request:** `multipart/form-data`
 
 | Field | Type | Rules |
 |---|---|---|
-| `files` | File, repeated | Same limits as the university sources |
+| `files` | File, repeated | Same limits as the university sources. A file whose bytes aren't a PDF or image is a `415` here. |
 | `type` | `StudentDocumentType` | Optional; defaults to `TRANSCRIPT` |
 
 **Response `201`**
 
-```jsonc
-{
-  "data": [
-    {
-      "id": "4be0…",
-      "type": "TRANSCRIPT",
-      "fileName": "transcript-fall-2026.pdf",
-      "mimeType": "application/pdf",
-      "fileSize": 482113,
-      "status": "PENDING",            // ProcessingStatus
-      "errorMessage": null,
-      "processedAt": null,
-      "createdAt": "2026-10-23T09:20:00.000Z"
-    }
-  ]
+```ts
+type StudentDocumentDto = {
+  id: string
+  type: StudentDocumentType
+  fileName: string
+  mimeType: string
+  fileSize: number
+  status: ProcessingStatus   // COMPLETED for uploads processed today
+  errorMessage: string | null
+  processedAt: string | null
+  createdAt: string
 }
 ```
 
-**Errors:** `400` · `401` · `413` · `415`
+```jsonc
+{ "data": StudentDocumentDto[] }
+```
+
+**Errors**
+
+- `400` · `401` · `403` (admin) · `413` · `415`
+- `422` "Select your university first" (no university or no major), "None of the courses in the uploaded files are in Computer Science", "Could not read transcript.pdf"
+- `502`
 
 ---
 
-### `GET /api/me/documents`: NEEDED · 🔒 Student
+### `GET /api/me/documents` · 🔒 Student · poll limiter
 
-Lists the student's uploaded documents and their processing status (polled like the sources).
+Lists the student's uploaded documents, newest first.
 
 **Query**
 
@@ -467,22 +558,25 @@ Lists the student's uploaded documents and their processing status (polled like 
 **Response `200`**
 
 ```jsonc
-{ "data": [ StudentDocumentDto ] }  // same shape as the upload response
+{ "data": StudentDocumentDto[] }
 ```
+
+**Errors:** `400` · `401` · `403` · `429`
 
 ---
 
-### `POST /api/me/onboarding/complete`: NEEDED · 🔒 Student
+### `POST /api/me/onboarding/complete` · 🔒 Student
 
-The **Complete** step's "Go to dashboard" action. It sets `onboardingCompletedAt`.
+The **Complete** step's "Go to dashboard" action. It sets `onboardingCompletedAt`. If onboarding is already complete, it returns the current data unchanged.
 
 **Request:** no body.
 
 **Response `200`:** the same `data` as `GET /api/me`.
 
-**Errors:** `422` with one of these messages, matching the order of the onboarding guards:
+**Errors:** `401` · `403` · `422` with one of these messages, checked in this order:
 
 - "Select your university and major first"
+- "Your university's course catalog isn't ready yet" (when `catalogStatus` isn't `AVAILABLE`)
 - "Select your year of study first"
 - "Upload your transcript first" (when `transcriptRequired` and no `TRANSCRIPT` document exists)
 
@@ -490,74 +584,74 @@ The **Complete** step's "Go to dashboard" action. It sets `onboardingCompletedAt
 
 ## 3. Student academics
 
-### `GET /api/me/academic-summary`: NEEDED · 🔒 Student
+### `GET /api/me/academic-summary` · 🔒 Student
 
-Everything the **Overview** dashboard shows. All of it is computed deterministically on the server from `AcademicRecord`, `Course`, `Major` and the latest `StudyPlan`. It replaces the module-level constants in `lib/academic/record.ts`.
+Everything the **Overview** dashboard shows, computed on the server from `AcademicRecord`, `Course`, `Major` and the latest `StudyPlan`.
 
 **Response `200`**
 
-```jsonc
-{
-  "data": {
-    "student": {
-      "name": "Omar Haddad",
-      "university": UniversitySummaryDto,
-      "major": MajorDto,
-      "yearOfStudy": "YEAR_4"
-    },
-    "gpa": {
-      "cumulative": 3.62 | null,              // null when nothing has been graded yet (new student)
-      "changeSinceLastYear": 0.08 | null      // cumulative now minus cumulative excluding the last 2 terms
-    },
-    "credits": {
-      "completed": 98,
-      "inProgress": 16,
-      "required": 128 | null,                 // Major.totalRequiredCredits
-      "remaining": 30 | null
-    },
-    "graduation": {
-      "progressPercent": 77 | null,           // completed / required
-      "expected": { "term": "FALL", "year": 2027 } | null   // last semester of the latest plan
-    },
-    "currentTerm": {
-      "term": "FALL",
-      "year": 2026,
-      "credits": 16,
-      "courses": [
-        {
-          "recordId": "…",
-          "course": CourseSummaryDto,
-          "expectedGrade": "B_PLUS" | null    // AcademicRecord.expectedGrade
-        }
-      ]
-    } | null,                                 // null when nothing is IN_PROGRESS
-    "lastTerm": {
-      "term": "SPRING",
-      "year": 2026,
-      "gpa": 3.71,
-      "courses": [ { "course": CourseSummaryDto, "status": "COMPLETED", "grade": "A_MINUS" } ]
-    } | null,
-    // oldest first; feeds the GPA trend chart
-    "termHistory": [
-      { "term": "FALL", "year": 2023, "gpa": 3.41, "credits": 16 }
-    ],
-    // feeds the requirement progress bars
-    "requirements": [
-      {
-        "category": "MAJOR_REQUIREMENT",
-        "completedCredits": 52,
-        "plannedCredits": 68                  // completed + in progress + planned in the latest plan
-      }
-    ]
+```ts
+type AcademicSummaryDto = {
+  student: {
+    name: string
+    university: UniversitySummaryDto | null
+    major: MajorDto | null
+    yearOfStudy: YearOfStudy | null
   }
+  gpa: {
+    cumulative: number | null          // null when nothing has been graded yet
+    changeSinceLastYear: number | null // cumulative now minus cumulative without the last 2 finished terms
+  }
+  credits: {
+    completed: number
+    inProgress: number
+    required: number | null            // Major.totalRequiredCredits
+    remaining: number | null           // max(required − completed, 0)
+  }
+  graduation: {
+    progressPercent: number | null     // round(completed / required × 100), capped at 100
+    expected: TermDto | null           // last semester of the latest plan
+  }
+  // the latest term with IN_PROGRESS records; null when there are none
+  currentTerm: (TermDto & {
+    credits: number
+    courses: {
+      recordId: string
+      course: CourseSummaryDto
+      expectedGrade: LetterGrade | null
+    }[]
+  }) | null
+  // the latest term with COMPLETED or FAILED records
+  lastTerm: (TermDto & {
+    gpa: number | null
+    courses: {
+      course: CourseSummaryDto
+      status: AcademicRecordStatus
+      grade: LetterGrade | null
+    }[]
+  }) | null
+  // finished terms, oldest first; feeds the GPA trend chart
+  termHistory: (TermDto & { gpa: number | null; credits: number })[]
+  // always one entry per CourseCategory; feeds the requirement progress bars
+  requirements: {
+    category: CourseCategory
+    completedCredits: number
+    plannedCredits: number             // completed + in progress + PLANNED in the latest plan
+  }[]
 }
 ```
 
-> FAILED attempts are excluded from GPA, matching the current `lib/gpa.ts`. The UI's week-of-term bar ("Week 8 of 15") has no data source, so it's left out and the frontend drops that UI.
+```jsonc
+{ "data": AcademicSummaryDto }
+```
+
+> GPA counts every graded record that isn't `IN_PROGRESS`, so **a FAILED attempt's F counts as 0.0**. `credits.completed` only counts `COMPLETED` records, while `termHistory[].credits` counts both completed and failed records in that term.
+
+**Errors:** `401` · `403` · `422` "Select your university first" (the student has no profile yet)
 
 ---
 
-### `GET /api/me/academic-records`: NEEDED · 🔒 Student
+### `GET /api/me/academic-records` · 🔒 Student
 
 The student's records, flat. The **Semester plan** page uses it for completed semesters, and **Sources** uses it for failed attempts.
 
@@ -567,172 +661,177 @@ The student's records, flat. The **Semester plan** page uses it for completed se
 |---|---|---|
 | `status` | `AcademicRecordStatus` | Optional |
 | `term` | `Term` | Optional |
-| `year` | int | Optional |
+| `year` | positive int | Optional |
 
 **Response `200`:** ordered by `year`, then term (SPRING → SUMMER → FALL), then course code.
 
-```jsonc
-{
-  "data": [
-    {
-      "id": "…",
-      "course": CourseSummaryDto,
-      "status": "FAILED",                 // AcademicRecordStatus
-      "grade": "F" | null,                // null for IN_PROGRESS
-      "expectedGrade": null,              // only used for IN_PROGRESS
-      "term": "SPRING",
-      "year": 2024
-    }
-  ]
+```ts
+type AcademicRecordDto = TermDto & {
+  id: string
+  course: CourseSummaryDto
+  status: AcademicRecordStatus
+  grade: LetterGrade | null         // null for IN_PROGRESS
+  expectedGrade: LetterGrade | null // only used for IN_PROGRESS
 }
 ```
 
+```jsonc
+{ "data": AcademicRecordDto[] }
+```
+
+**Errors:** `400` · `401` · `403`
+
 ---
 
-### `GET /api/me/courses`: NEEDED · 🔒 Student
+### `GET /api/me/courses` · 🔒 Student
 
-The **Courses** page: every course in the student's major, with the student's status for each. Filtering uses the page's URL params. A major has tens of courses, not thousands, so the list isn't paginated, and the frontend counts the filter chips locally.
+The **Courses** page: every course in the student's major, with the student's status for each, ordered by code. The list isn't paginated; the frontend counts the filter chips locally.
 
 **Query**
 
 | Param | Type | Notes |
 |---|---|---|
-| `q` | string | Matches code, name or description |
+| `q` | string | Matches code, name or description (case-insensitive) |
 | `category` | `CourseCategory` | Optional |
 | `status` | `StudentCourseStatus` | Optional |
 
 **Response `200`**
 
-```jsonc
-{
-  "data": [
-    {
-      ...CourseDto,
-      "prerequisites": [ { "id", "code", "name", "met": true } ],  // met = COMPLETED in the student's records
-      "corequisites":  [ { "id", "code", "name", "met": false } ], // met = COMPLETED or IN_PROGRESS
-      "status": "PLANNED",                 // StudentCourseStatus
-      "statusDetail": {
-        "grade": "A_MINUS" | null,         // COMPLETED / FAILED
-        "term": "SPRING" | null,           // when it was or will be taken
-        "year": 2027 | null
-      }
-    }
-  ]
+```ts
+type RequisiteDto = CourseRefDto & { met: boolean }
+
+type StudentCourseDto = CourseSummaryDto & StudentStatusDto & {
+  majorId: string
+  description: string | null
+  offeredTerms: Term[]
+  prerequisites: RequisiteDto[] // met = COMPLETED in the student's records
+  corequisites: RequisiteDto[]  // met = COMPLETED or IN_PROGRESS
 }
 ```
 
-**Errors:** `422` "Select your major first"
+```jsonc
+{ "data": StudentCourseDto[] }
+```
+
+**Errors:** `400` · `401` · `403` · `422` "Select your major first"
 
 ---
 
-### `GET /api/courses/:courseId`: LATER · 🔒 any role
+### `GET /api/courses/:courseId` · 🔒 any role
 
-A course details page (not built yet). It's also used when a course chip is clicked.
+A course's details, for a course details page or when a course chip is clicked.
 
 **Params:** `courseId` (uuid)
 
 **Response `200`**
 
-```jsonc
-{
-  "data": {
-    ...CourseDto,
-    "requiredFor": CourseRefDto[],        // courses that list this one as a prerequisite
-    "resources": LearningResourceDto[],
-    "studentStatus": { "status", "statusDetail" } | null   // null for admins
-  }
+```ts
+type CourseDetailsDto = CourseDto & {
+  requiredFor: CourseRefDto[]          // courses that list this one as a prerequisite, ordered by code
+  resources: LearningResourceDto[]     // ordered by title
+  studentStatus: StudentStatusDto | null // null for admins
 }
 ```
 
-**Errors:** `404`
+```jsonc
+{ "data": CourseDetailsDto }
+```
+
+**Errors:** `400` · `401` · `404` "Course not found"
 
 ---
 
 ## 4. Study plan
 
-### `GET /api/me/study-plan`: NEEDED · 🔒 Student
+```ts
+type StudyPlanCourseDto = {
+  id: string                  // StudyPlanCourse.id
+  status: PlannedCourseStatus
+  course: CourseDto
+}
 
-The student's latest study plan, for the **Semester plan** page. The frontend merges it with the completed semesters from `/api/me/academic-records`, as `buildPlanTimeline()` does today.
+type StudyPlanDto = {
+  id: string
+  name: string                // "Study plan"
+  generatedAt: string         // StudyPlan.createdAt
+  assumptions: string[]
+  notes: string[]
+  semesters: (TermDto & {     // oldest first
+    id: string
+    rationale: string | null
+    credits: number           // every course except SKIPPED ones
+    courses: StudyPlanCourseDto[] // ordered by code
+  })[]
+  totals: {
+    plannedCredits: number    // PLANNED courses across the plan
+    creditsRequired: number | null
+    meetsDegreeTotal: boolean | null // COMPLETED + IN_PROGRESS records + plannedCredits ≥ required
+  }
+  expectedGraduation: TermDto | null // the last semester
+}
+```
+
+### `GET /api/me/study-plan` · 🔒 Student
+
+The student's latest study plan, for the **Semester plan** page. The frontend merges it with the completed semesters from `/api/me/academic-records`.
 
 **Response `200`**
 
 ```jsonc
-{
-  "data": {
-    "id": "…",
-    "name": "Study plan",
-    "generatedAt": "2026-10-14T12:00:00.000Z",   // StudyPlan.createdAt
-    "assumptions": ["You pass every Fall 2026 course.", "…"],
-    "notes": ["…"],
-    "semesters": [
-      {
-        "id": "…",
-        "term": "SPRING",
-        "year": 2027,
-        "rationale": "Clears the systems sequence before…" | null,
-        "credits": 15,
-        "courses": [
-          {
-            "id": "…",                // StudyPlanCourse.id
-            "status": "PLANNED",      // PlannedCourseStatus
-            "course": CourseDto
-          }
-        ]
-      }
-    ],
-    "totals": {
-      "plannedCredits": 30,
-      "creditsRequired": 128 | null,
-      "meetsDegreeTotal": true | null   // completed + in progress + planned ≥ required
-    },
-    "expectedGraduation": { "term": "FALL", "year": 2027 }
-  } | null   // null when no plan has been generated
-}
+{ "data": StudyPlanDto | null }   // null when no plan has been generated
 ```
+
+**Errors:** `401` · `403`
 
 ---
 
-### `POST /api/me/study-plan/generate`: NEEDED · 🔒 Student · AI
+### `POST /api/me/study-plan/generate` · 🔒 Student · AI
 
-Generates a new plan through graduation. The AI proposes it, and the backend checks prerequisites, offered terms and credit limits before saving. The previous plan is kept, and the newest one becomes "the" plan. The route is slow (several seconds), so the frontend shows a loading state and uses a long timeout.
+Generates a new plan through graduation. The plan starts at the semester after the later of today's term and the student's latest record. The AI proposes the semesters, and the backend checks prerequisites, offered terms and the credit limit. Courses that break a rule are left out, with a note in `notes`. Earlier plans are kept, and the newest one becomes "the" plan. The route is slow (several seconds), so the frontend shows a loading state and uses a long timeout.
 
 **Request body:** optional.
 
 ```jsonc
-{ "maxCreditsPerSemester": 16 }   // optional, 12–18, default 16
+{ "maxCreditsPerSemester": 16 }   // optional int, 12–18, default 16
 ```
 
-**Response `201`:** the same `data` as `GET /api/me/study-plan`.
+**Response `201`**
 
-**Errors:** `422` "Select your major first" or "Your major has no courses yet" · `429` · `502` (AI provider failed)
+```jsonc
+{ "data": StudyPlanDto }
+```
+
+**Errors:** `400` · `401` · `403` · `422` "Select your major first", "Your major has no courses yet" or "You have no courses left to plan" · `429` · `502`
 
 ---
 
-### `PATCH /api/me/study-plan/courses/:planCourseId`: LATER · 🔒 Student
+### `PATCH /api/me/study-plan/courses/:planCourseId` · 🔒 Student
 
 Marks a planned course as skipped, or restores it.
 
-**Params:** `planCourseId` (uuid; must belong to the caller's plan, otherwise `404`)
+**Params:** `planCourseId` (uuid; must belong to one of the caller's plans)
 
-**Request body**
+**Request body:** unknown fields are rejected.
 
 ```jsonc
-{ "status": "SKIPPED" }   // PlannedCourseStatus
+{ "status": "SKIPPED" }   // "PLANNED" or "SKIPPED" only ("Status must be PLANNED or SKIPPED")
 ```
 
 **Response `200`**
 
 ```jsonc
-{ "data": { "id", "status", "course": CourseDto } }
+{ "data": StudyPlanCourseDto }
 ```
+
+**Errors:** `400` · `401` · `403` · `404` "Planned course not found"
 
 ---
 
 ## 5. What-if analysis
 
-### `POST /api/me/what-if`: NEEDED · 🔒 Student · AI
+### `POST /api/me/what-if` · 🔒 Student · AI
 
-Analyzes a scenario described in natural language, using the student's real record and plan. **Nothing is saved, and the record and plan aren't modified.** It replaces `simulation/what-if/mock-analyze.ts`.
+Analyzes a scenario described in natural language, using the student's real record and latest plan. **Nothing is saved, and the record and plan aren't modified.** The AI only identifies the scenario; the backend computes the result.
 
 **Request body**
 
@@ -740,7 +839,7 @@ Analyzes a scenario described in natural language, using the student's real reco
 { "scenario": "What if I fail CS 3110 this semester?" }   // trimmed, 10–500 characters
 ```
 
-**Response `200`:** `ScenarioResult`, which the frontend already defines in `src/types/what-if.ts`. In this route, labels are display strings (`"Spring 2027"`) and course references are codes, because the page only displays them.
+**Response `200`:** labels are display strings (`"Spring 2027"`, graduation `"December 2027"`) and course references are codes, because the page only displays them.
 
 ```ts
 type ScenarioResult = ScenarioAnalysis | UnclearScenario
@@ -750,9 +849,9 @@ type ScenarioAnalysis = {
   kind: "fail" | "grade-change" | "retake" | "add" | "move-earlier" | "drop" | "swap"
   headline: string                         // "Graduation moves one semester later"
   summary: string
-  gpa: { label: string; current: number; scenario: number }
+  gpa: { label: string; current: number | null; scenario: number | null }
   credits: { label: string; current: number; scenario: number }
-  graduation: { current: string; scenario: string; semestersDelta: number }  // "December 2027"
+  graduation: { current: string; scenario: string; semestersDelta: number }
   planChanges: {
     kind: "added" | "removed" | "moved" | "retake"
     code: string
@@ -771,22 +870,26 @@ type ScenarioAnalysis = {
 
 type UnclearScenario = {
   status: "unclear"
-  message: string                          // "Which course do you mean?…"
+  message: string                          // "I couldn't find CS 9999 in your major's courses. Which course do you mean?"
   suggestions: string[]                    // example scenarios the student can click
 }
 ```
 
+```jsonc
+{ "data": ScenarioResult }
+```
+
 An unclear scenario returns `200` with `status: "unclear"`, not an error.
 
-**Errors:** `400` · `422` "Select your major first" · `429` · `502`
+**Errors:** `400` · `401` · `403` · `422` "Select your major first" or "Generate a study plan first" · `429` · `502`
 
 ---
 
 ## 6. AI advisor
 
-### `POST /api/me/advisor/chat`: NEEDED · 🔒 Student · AI · streaming
+### `POST /api/me/advisor/chat` · 🔒 Student · AI · streaming
 
-Streams the advisor's reply, grounded in the student's record and plan. The chat history isn't stored; the client sends it with each request. This matches `AdvisorService.streamReply(history, signal)` in `src/types/advisor.ts`. The frontend cancels a reply by aborting the request.
+Streams the advisor's reply, grounded in the student's academic summary, courses, records and latest plan. The chat history isn't stored; the client sends it with each request. The frontend cancels a reply by aborting the request.
 
 **Request body**
 
@@ -800,11 +903,11 @@ Streams the advisor's reply, grounded in the student's record and plan. The chat
 }
 ```
 
-- `messages`: 1–20 items, oldest first, and the last item must have `role: "student"`.
+- `messages`: 1–20 items, oldest first, and the last item must have `role: "student"` (`"The last message must be from the student"`).
 - `role`: `"student"` or `"assistant"`.
-- `content`: trimmed, 1–1000 characters for student messages. Assistant messages are capped at 8000.
+- `content`: trimmed. Student messages are 1–1000 characters; assistant messages are 1–8000.
 
-**Response `200`:** `Content-Type: text/event-stream`
+**Response `200`:** `Content-Type: text/event-stream`, `Cache-Control: no-cache`
 
 ```
 event: delta
@@ -817,22 +920,24 @@ event: done
 data: {}
 ```
 
-If the AI fails partway through, the stream sends `event: error` with `data: {"message":"The advisor is unavailable right now."}` and then closes. The reply may contain Markdown (bold, lists).
+If the AI fails partway through, the stream sends `event: error` with `data: {"message":"The advisor is unavailable right now."}` and then closes. When the client aborts, the stream just closes. The reply may contain Markdown (bold, lists).
 
-**Errors before the stream starts** are sent as normal JSON: `400` · `401` · `422` · `429`
+**Errors before the stream starts** are sent as normal JSON: `400` · `401` · `403` · `422` "Select your university first" or "Select your major first" · `429` · `502`
 
 ---
 
 ## 7. Learning resources and quizzes (Sources page)
 
-### `GET /api/me/recommendations`: NEEDED · 🔒 Student
+### `GET /api/me/recommendations` · 🔒 Student
 
 The "Focus courses" sections:
 
-- **failed**: courses with a FAILED record
-- **difficult**: IN_PROGRESS courses whose `expectedGrade` is B+ or lower, lowest first
+- **failed**: courses whose latest failed attempt hasn't been passed since, with the term of the retake if one exists (the first record after the failure)
+- **difficult**: `IN_PROGRESS` courses whose `expectedGrade` is **C+ or lower**, lowest first. Courses already listed under failed are left out.
 
-Each comes with matching resources. This replaces `lib/sources/recommendations.ts`.
+Each comes with the learning resources linked to the course. The first time a recommended course has no resources, the backend asks the AI (with web search) to find some, checks that the links work, and saves them with `verified: false`. That makes the first load slow. If the search fails, the recommendations are still returned, without new resources.
+
+`why` is a short generated sentence, for example `"Failed in Spring 2024 with F. Not retaken yet. Required for CS 3110, CS 4410."` or `"Expected grade is C. Builds on CS 2110 (C-). Required for CS 4410."`.
 
 **Response `200`**
 
@@ -842,16 +947,16 @@ Each comes with matching resources. This replaces `lib/sources/recommendations.t
     "failed": [
       {
         "course": CourseSummaryDto,
-        "why": "It's a prerequisite for CS 3110 Data Structures, so a solid foundation pays off now.",
-        "attempt": { "term": "SPRING", "year": 2024, "grade": "F", "retakenIn": { "term": "FALL", "year": 2024 } | null },
+        "why": "…",
+        "attempt": { "term": "SPRING", "year": 2024, "grade": "F" | null, "retakenIn": TermDto | null },
         "resources": LearningResourceDto[]
       }
     ],
     "difficult": [
       {
         "course": CourseSummaryDto,
-        "why": "You need it for CS 4410 next semester.",
-        "expectedGrade": "B",
+        "why": "…",
+        "expectedGrade": "C",
         "resources": LearningResourceDto[]
       }
     ]
@@ -859,19 +964,29 @@ Each comes with matching resources. This replaces `lib/sources/recommendations.t
 }
 ```
 
+Both lists are empty when the student has no records.
+
+**Errors:** `401` · `403`
+
 ---
 
-### `POST /api/resources/search`: NEEDED · 🔒 Student · AI
+### `POST /api/resources/search` · 🔒 Student · AI
 
-The AI-powered resource search. It replaces `simulation/sources/search.ts`. Results come from stored `LearningResource` rows, plus new ones the AI finds, which are saved with `verified: false`.
+The AI-powered resource search.
+
+1. The query is recognized as a course in the student's major when it equals that course's code or name (ignoring case and spacing).
+2. Stored resources on the selected platforms that are linked to that course or mention the query are returned first, course-linked ones first.
+3. When fewer than 3 stored resources match, or a `goal` is given, the AI searches the web. Working links on the selected platforms are saved with `verified: false` and added after the stored ones.
+
+At most 20 results are returned.
 
 **Request body:** the same rules as `resourceSearchSchema`.
 
 ```jsonc
 {
   "query": "CS 3110",                          // trimmed, 2–100: a course code, course name or topic
-  "goal": "I keep getting lost in recursion",  // optional, ≤ 300
-  "platforms": ["YOUTUBE", "COURSERA"]         // ResourcePlatform[], at least 1
+  "goal": "I keep getting lost in recursion",  // optional, ≤ 300; empty is ignored
+  "platforms": ["YOUTUBE", "COURSERA"]         // ResourcePlatform[], at least 1, duplicates removed
 }
 ```
 
@@ -880,21 +995,21 @@ The AI-powered resource search. It replaces `simulation/sources/search.ts`. Resu
 ```jsonc
 {
   "data": {
-    "results": LearningResourceDto[],          // best match first; may be empty
-    "matchedCourse": CourseSummaryDto | null   // the course in the student's major the query was recognized as
+    "results": LearningResourceDto[],          // may be empty
+    "matchedCourse": CourseSummaryDto | null   // the course the query was recognized as
   }
 }
 ```
 
-**Errors:** `400` · `429` · `502`
+**Errors:** `400` · `401` · `403` · `429` · `502` (only when the AI search fails and no stored resources matched)
 
 ---
 
-### `POST /api/quizzes`: NEEDED · 🔒 Student · AI
+### `POST /api/quizzes` · 🔒 Student · AI
 
-Generates a practice quiz for a resource, or for a course. **The quiz isn't stored.** Scoring happens on the client, so the answers are included. This replaces `lib/sources/quiz.ts`.
+Generates a practice quiz for a resource, or for a course, from its title, description and topics. **The quiz isn't stored.** Scoring happens on the client, so the answers are included. The options are shuffled.
 
-**Request body:** send exactly one of `resourceId` or `courseId`.
+**Request body:** send exactly one of `resourceId` or `courseId`. The other can be left out or `null`.
 
 ```jsonc
 {
@@ -911,11 +1026,12 @@ Generates a practice quiz for a resource, or for a course. **The quiz isn't stor
   "data": {
     "id": "…",                              // random, not persisted
     "topic": "Algorithms",                  // display label
+    // at most `count` questions; can be fewer if the AI returns fewer
     "questions": [
       {
-        "id": "q1",
+        "id": "q1",                          // "q1", "q2", …
         "prompt": "What is the worst-case time complexity of quicksort?",
-        "options": ["O(n)", "O(n log n)", "O(n²)", "O(log n)"],   // exactly 4
+        "options": ["O(n)", "O(n log n)", "O(n²)", "O(log n)"],   // exactly 4, distinct
         "answer": 2,                         // index into options
         "explanation": "When the pivot is always the smallest or largest element…"
       }
@@ -924,15 +1040,15 @@ Generates a practice quiz for a resource, or for a course. **The quiz isn't stor
 }
 ```
 
-**Errors:** `400` · `404` (resource or course) · `422` "Not enough material to build a quiz" · `429` · `502`
+**Errors:** `400` ("Send exactly one of resourceId or courseId", "Choose 5, 10 or 15 questions") · `401` · `403` · `404` "Resource not found" or "Course not found" · `422` "Not enough material to build a quiz" · `429` · `502`
 
 ---
 
 ## 8. Admin
 
-Every route in this section is **🔒 Admin**.
+Every route in this section is **🔒 Admin**. Students get `403`.
 
-### `GET /api/admin/stats`: NEEDED
+### `GET /api/admin/stats`
 
 The admin **Dashboard**: stat tiles, the registrations chart and the catalog-coverage bar.
 
@@ -940,7 +1056,7 @@ The admin **Dashboard**: stat tiles, the registrations chart and the catalog-cov
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `months` | int 1–24 | `8` | How many months of registrations to return, ending with the current month |
+| `months` | int 1–24 | `8` | How many months of registrations to return, ending with the current month (UTC) |
 
 **Response `200`**
 
@@ -954,13 +1070,15 @@ The admin **Dashboard**: stat tiles, the registrations chart and the catalog-cov
       "courses": 1240,
       "aiExtractedCourses": 312          // Course.source = AI_EXTRACTED
     },
-    // oldest first, with zero-filled months
+    // student sign-ups, oldest first, with zero-filled months
     "registrationsByMonth": [ { "month": "2026-03", "count": 4 } ],
     "universitiesByCatalogStatus": { "AVAILABLE": 9, "PROCESSING": 2, "UNAVAILABLE": 4 },
     "sourcesByStatus": { "PENDING": 3, "PROCESSING": 1, "COMPLETED": 41, "FAILED": 2 }
   }
 }
 ```
+
+**Errors:** `400` · `401` · `403`
 
 ---
 
@@ -972,14 +1090,27 @@ type AdminUniversityDto = UniversityDto & {
   updatedAt: string
   majorCount: number
   courseCount: number
-  studentCount: number
+  studentCount: number   // students who aren't deleted
   catalogStatus: CatalogStatus
 }
 ```
 
-#### `GET /api/admin/universities`: NEEDED
+Body field rules, shared by POST and PATCH (every field is trimmed):
 
-**Query:** `page`, `pageSize`, `q` (matches name, shortName, city or country), `country` (optional), `catalogStatus` (optional `CatalogStatus`)
+| Field | Rules |
+|---|---|
+| `name` | 3–120 |
+| `shortName` | ≤ 12 |
+| `country` | 2–60, letters only |
+| `city` | 1–80, letters only |
+| `website` | http(s) URL ("Enter a full address starting with https://") |
+| `catalogYear` | `/^\d{4}[–-]\d{2}$/` ("Use the format 2025–26") |
+
+#### `GET /api/admin/universities`
+
+Ordered by name.
+
+**Query:** `page`, `pageSize`, `q` (matches name, shortName, city or country), `country` (optional, exact match ignoring case), `catalogStatus` (optional `CatalogStatus`)
 
 **Response `200`**
 
@@ -987,7 +1118,7 @@ type AdminUniversityDto = UniversityDto & {
 { "data": AdminUniversityDto[], "meta": { "page", "pageSize", "total" } }
 ```
 
-#### `GET /api/admin/universities/:universityId`: NEEDED
+#### `GET /api/admin/universities/:universityId`
 
 The university details sheet.
 
@@ -995,34 +1126,49 @@ The university details sheet.
 
 **Response `200`**
 
+```ts
+type AdminMajorDto = MajorDto & { courseCount: number; studentCount: number }
+
+type AdminUniversitySourceDto = {
+  id: string
+  title: string | null
+  url: string
+  sourceType: SourceType
+  status: ProcessingStatus
+  errorMessage: string | null
+  lastProcessedAt: string | null
+  createdAt: string
+}
+```
+
 ```jsonc
 {
   "data": {
     ...AdminUniversityDto,
-    "majors": [ { ...MajorDto, "courseCount": 42, "studentCount": 12 } ],
-    "sources": [ { "id", "title", "url", "sourceType", "status", "errorMessage", "lastProcessedAt", "createdAt" } ]
+    "majors": AdminMajorDto[],             // ordered by name
+    "sources": AdminUniversitySourceDto[]  // newest first
   }
 }
 ```
 
-**Errors:** `404`
+**Errors:** `400` · `404` "University not found"
 
-#### `POST /api/admin/universities`: NEEDED
+#### `POST /api/admin/universities`
 
-**Request body:** the same rules as `adminUniversitySchema`.
+**Request body**
 
 ```jsonc
 {
-  "name": "University of Michigan",     // 3–120
-  "shortName": "U-M" | null,            // ≤ 12
-  "country": "United States",           // 2–60, letters only
-  "city": "Ann Arbor",                  // 1–80, letters only
-  "website": "https://umich.edu" | null,  // http(s) URL
-  "catalogYear": "2025–26" | null       // /^\d{4}[–-]\d{2}$/
+  "name": "University of Michigan",
+  "shortName": "U-M",                // optional
+  "country": "United States",
+  "city": "Ann Arbor",
+  "website": "https://umich.edu",    // optional
+  "catalogYear": "2025–26"           // optional
 }
 ```
 
-The form sends `""` for empty optional fields, and the backend stores `""` as `null`.
+Optional fields may be left out, `null` or `""`; all three are stored as `null`.
 
 **Response `201`**
 
@@ -1032,9 +1178,9 @@ The form sends `""` for empty optional fields, and the backend stores `""` as `n
 
 **Errors:** `400` · `409` "A university with this name already exists in this country"
 
-#### `PATCH /api/admin/universities/:universityId`: NEEDED
+#### `PATCH /api/admin/universities/:universityId`
 
-**Request body:** any subset of the POST fields. Omitted fields are left unchanged, and `null` clears an optional field.
+**Request body:** any subset of the POST fields, at least one; unknown fields are rejected. Omitted fields are left unchanged, and `null` or `""` clears an optional field.
 
 **Response `200`**
 
@@ -1042,39 +1188,49 @@ The form sends `""` for empty optional fields, and the backend stores `""` as `n
 { "data": AdminUniversityDto }
 ```
 
-**Errors:** `400` · `404` · `409`
+**Errors:** `400` · `404` "University not found" · `409` "A university with this name already exists in this country"
 
-#### `DELETE /api/admin/universities/:universityId`: NEEDED
+#### `DELETE /api/admin/universities/:universityId`
 
-Deletes the university along with its majors, courses and sources. Student profiles that pointed to it are set to `null`.
+Deletes the university along with its majors, courses and sources, and the study plans that use its courses. Student profiles that pointed to it are set to `null`.
 
 **Response:** `204`
 
-**Errors:** `404` · `409` "Courses at this university are used in student records" (`AcademicRecord.course` is `onDelete: Restrict`)
+**Errors:** `400` · `404` "University not found" · `409` "Courses at this university are used in student records"
 
 ---
 
 ### Majors
 
-The admin course form needs a major to attach a course to, since `Course.majorId` is required. The frontend currently attaches courses to a university and will add a major select.
+Body field rules, shared by POST and PATCH:
 
-#### `GET /api/admin/universities/:universityId/majors`: NEEDED
+| Field | Rules |
+|---|---|
+| `name` | trimmed, 2–100 |
+| `degreeType` | `DegreeType` ("Select a valid degree type") |
+| `totalRequiredCredits` | int 1–300, or `null` |
+
+#### `GET /api/admin/universities/:universityId/majors`
+
+Ordered by name.
 
 **Response `200`**
 
 ```jsonc
-{ "data": [ { ...MajorDto, "courseCount": 42, "studentCount": 12 } ] }
+{ "data": AdminMajorDto[] }
 ```
 
-#### `POST /api/admin/universities/:universityId/majors`: NEEDED
+**Errors:** `400` · `404` "University not found"
+
+#### `POST /api/admin/universities/:universityId/majors`
 
 **Request body**
 
 ```jsonc
 {
-  "name": "Computer Science",       // 2–100
-  "degreeType": "BACHELOR",         // DegreeType, default BACHELOR
-  "totalRequiredCredits": 128 | null  // int 1–300
+  "name": "Computer Science",
+  "degreeType": "BACHELOR",          // optional, default BACHELOR
+  "totalRequiredCredits": 128        // optional, default null
 }
 ```
 
@@ -1084,11 +1240,11 @@ The admin course form needs a major to attach a course to, since `Course.majorId
 { "data": MajorDto }
 ```
 
-**Errors:** `400` · `404` (university) · `409` "This major already exists at this university"
+**Errors:** `400` · `404` "University not found" · `409` "This major already exists at this university"
 
-#### `PATCH /api/admin/majors/:majorId`: NEEDED
+#### `PATCH /api/admin/majors/:majorId`
 
-**Request body:** any subset of the POST fields.
+**Request body:** any subset of the POST fields, at least one; unknown fields are rejected. `totalRequiredCredits: null` clears it.
 
 **Response `200`**
 
@@ -1096,13 +1252,15 @@ The admin course form needs a major to attach a course to, since `Course.majorId
 { "data": MajorDto }
 ```
 
-**Errors:** `400` · `404` · `409`
+**Errors:** `400` · `404` "Major not found" · `409` "This major already exists at this university"
 
-#### `DELETE /api/admin/majors/:majorId`: NEEDED
+#### `DELETE /api/admin/majors/:majorId`
+
+Deletes the major and its courses.
 
 **Response:** `204`
 
-**Errors:** `404` · `409` (its courses are used in student records)
+**Errors:** `400` · `404` "Major not found" · `409` "Courses in this major are used in student records"
 
 ---
 
@@ -1118,9 +1276,22 @@ type AdminCourseDto = CourseDto & {
 }
 ```
 
-#### `GET /api/admin/courses`: NEEDED
+Body field rules, shared by POST and PATCH:
 
-The admin **Courses** table. `/admin/courses?university=<id>` is a link the UI already uses.
+| Field | Rules |
+|---|---|
+| `majorId` | uuid ("Choose a major") |
+| `code` | Formatted server-side: `"cs3110"`, `"cs-3110"` and `"CS  3110"` all become `"CS 3110"`. Must then match `/^[A-Z]{2,5} \d{3,4}[A-Z]?$/` ("Use a code like CS 3110 or MATH 101"). |
+| `name` | trimmed, 3–100 (the frontend field is `title`) |
+| `description` | trimmed, 20–400 |
+| `credits` | int 0–8 |
+| `category` | `CourseCategory` |
+| `offeredTerms` | `Term[]`, may be empty; duplicates removed |
+| `prerequisites` / `corequisites` | Course codes in the same major, formatted like `code`; blanks and duplicates removed |
+
+#### `GET /api/admin/courses`
+
+The admin **Courses** table, ordered by code. `/admin/courses?university=<id>` is a link the UI already uses.
 
 **Query**
 
@@ -1139,21 +1310,23 @@ The admin **Courses** table. `/admin/courses?university=<id>` is a link the UI a
 { "data": AdminCourseDto[], "meta": { "page", "pageSize", "total" } }
 ```
 
-#### `POST /api/admin/courses`: NEEDED
+**Errors:** `400`
 
-**Request body:** the same rules as `createCourseSchema`, with the university replaced by the major.
+#### `POST /api/admin/courses`
+
+**Request body**
 
 ```jsonc
 {
-  "majorId": "…",                         // uuid
-  "code": "CS 3110",                      // normalized server-side to "CS 3110"; /^[A-Z]{2,5} \d{3,4}[A-Z]?$/
-  "name": "Data Structures & Algorithms", // 3–100 (the frontend field is `title`)
-  "description": "Lists, trees, hash tables…",  // 20–400
-  "credits": 4,                           // int 0–8
-  "category": "MAJOR_REQUIREMENT",        // CourseCategory
-  "offeredTerms": ["FALL", "SPRING"],     // Term[], may be empty
-  "prerequisites": ["CS 1120", "MATH 2310"],  // course codes in the same major
-  "corequisites": []                      // course codes in the same major
+  "majorId": "…",
+  "code": "CS 3110",
+  "name": "Data Structures & Algorithms",
+  "description": "Lists, trees, hash tables…",
+  "credits": 4,
+  "category": "MAJOR_REQUIREMENT",
+  "offeredTerms": ["FALL", "SPRING"],         // optional, default []
+  "prerequisites": ["CS 1120", "MATH 2310"],  // optional, default []
+  "corequisites": []                          // optional, default []
 }
 ```
 
@@ -1167,13 +1340,13 @@ The backend resolves the requisite codes to course ids within the same major. It
 
 **Errors**
 
-- `400`, with `details` paths `prerequisites` / `corequisites` for: an unknown code ("CS 9999 isn't in this major's courses"), a malformed code, or a course that requires itself
-- `404` (major)
+- `400`, with `details` paths `prerequisites` / `corequisites` for: a malformed code ("Check the format of …"), an unknown code ("CS 9999 isn't in this major's courses"), or a course that requires itself ("A course can't require itself")
+- `404` "Major not found"
 - `409` "CS 3110 already exists in this major"
 
-#### `PATCH /api/admin/courses/:courseId`: NEEDED
+#### `PATCH /api/admin/courses/:courseId`
 
-**Request body:** any subset of the POST fields. If `prerequisites` or `corequisites` is sent, it **replaces** that list. The backend sets `updatedById` to the caller.
+**Request body:** any subset of the POST fields, at least one; unknown fields are rejected. If `prerequisites` or `corequisites` is sent, it **replaces** that list. Sending a different `majorId` moves the course: its requisites must exist in the new major, and links from courses in the old major are removed. The backend sets `updatedById` to the caller.
 
 **Response `200`**
 
@@ -1181,17 +1354,19 @@ The backend resolves the requisite codes to course ids within the same major. It
 { "data": AdminCourseDto }
 ```
 
-**Errors:** `400` · `404` · `409`
+**Errors:** `400` · `404` "Course not found" or "Major not found" · `409` "CS 3110 already exists in this major"
 
-#### `DELETE /api/admin/courses/:courseId`: NEEDED
+#### `DELETE /api/admin/courses/:courseId`
 
 **Response:** `204`
 
-**Errors:** `404` · `409` "This course is used in student records or plans"
+**Errors:** `400` · `404` "Course not found" · `409` "This course is used in student records or plans"
 
 ---
 
 ### Students (read-only)
+
+Deleted accounts are never listed.
 
 ```ts
 type AdminStudentDto = {
@@ -1203,12 +1378,12 @@ type AdminStudentDto = {
   yearOfStudy: YearOfStudy | null
   registeredAt: string                           // User.createdAt
   lastActiveAt: string | null                    // latest Session.lastUsedAt
-  stage: "PROCESSED" | "UPLOADED" | "NONE"       // has records / has documents only / nothing
+  stage: StudentStage                            // PROCESSED: has records · UPLOADED: has documents only · NONE: nothing
   academic: {
-    gpa: number | null
+    gpa: number | null                           // same rule as the academic summary (failed grades count)
     creditsCompleted: number
     creditsRequired: number | null
-    expectedGraduation: TermRefDto | null
+    expectedGraduation: TermDto | null           // last semester of the newest plan
   } | null                                       // null while stage !== "PROCESSED"
   documents: { transcripts: number }
 }
@@ -1216,9 +1391,11 @@ type AdminStudentDto = {
 
 The admin side never returns transcript contents or individual grades, only these summary values.
 
-#### `GET /api/admin/students`: NEEDED
+#### `GET /api/admin/students`
 
-**Query:** `page`, `pageSize`, `q` (matches name or email), `universityId` (optional), `stage` (optional)
+Newest registrations first.
+
+**Query:** `page`, `pageSize`, `q` (matches name or email), `universityId` (optional uuid), `stage` (optional `StudentStage`)
 
 **Response `200`**
 
@@ -1226,9 +1403,11 @@ The admin side never returns transcript contents or individual grades, only thes
 { "data": AdminStudentDto[], "meta": { "page", "pageSize", "total" } }
 ```
 
-#### `GET /api/admin/students/:studentId`: NEEDED
+**Errors:** `400`
 
-The student details sheet.
+#### `GET /api/admin/students/:studentId`
+
+The student details sheet. `studentId` is the `User.id`.
 
 **Response `200`**
 
@@ -1237,55 +1416,57 @@ The student details sheet.
   "data": {
     ...AdminStudentDto,
     "onboardingCompletedAt": "…" | null,
+    // newest first
     "documentsList": [ { "id", "type", "fileName", "status", "createdAt" } ]
   }
 }
 ```
 
-**Errors:** `404`
+**Errors:** `400` · `404` "Student not found"
 
 ---
 
 ## 9. Route index
 
-| Method | Path | Auth | Status |
+| Method | Path | Auth | Notes |
 |---|---|---|---|
-| POST | `/api/auth/signin` | public | EXISTS |
-| POST | `/api/auth/login` | public | EXISTS |
-| POST | `/api/auth/refresh` | cookie | EXISTS |
-| POST | `/api/auth/logout` | cookie | EXISTS |
-| GET | `/api/me` | any | NEEDED |
-| PUT | `/api/me/university` | student | NEEDED |
-| POST | `/api/me/university/sources` | student | NEEDED |
-| GET | `/api/me/university/sources` | student | NEEDED |
-| PUT | `/api/me/year-of-study` | student | NEEDED |
-| POST | `/api/me/documents` | student | NEEDED |
-| GET | `/api/me/documents` | student | NEEDED |
-| POST | `/api/me/onboarding/complete` | student | NEEDED |
-| GET | `/api/me/academic-summary` | student | NEEDED |
-| GET | `/api/me/academic-records` | student | NEEDED |
-| GET | `/api/me/courses` | student | NEEDED |
-| GET | `/api/courses/:courseId` | any | LATER |
-| GET | `/api/me/study-plan` | student | NEEDED |
-| POST | `/api/me/study-plan/generate` | student | NEEDED |
-| PATCH | `/api/me/study-plan/courses/:planCourseId` | student | LATER |
-| POST | `/api/me/what-if` | student | NEEDED |
-| POST | `/api/me/advisor/chat` (SSE) | student | NEEDED |
-| GET | `/api/me/recommendations` | student | NEEDED |
-| POST | `/api/resources/search` | student | NEEDED |
-| POST | `/api/quizzes` | student | NEEDED |
-| GET | `/api/admin/stats` | admin | NEEDED |
-| GET / POST | `/api/admin/universities` | admin | NEEDED |
-| GET / PATCH / DELETE | `/api/admin/universities/:universityId` | admin | NEEDED |
-| GET / POST | `/api/admin/universities/:universityId/majors` | admin | NEEDED |
-| PATCH / DELETE | `/api/admin/majors/:majorId` | admin | NEEDED |
-| GET / POST | `/api/admin/courses` | admin | NEEDED |
-| PATCH / DELETE | `/api/admin/courses/:courseId` | admin | NEEDED |
-| GET | `/api/admin/students` | admin | NEEDED |
-| GET | `/api/admin/students/:studentId` | admin | NEEDED |
+| POST | `/api/auth/signin` | public | auth limiter |
+| POST | `/api/auth/login` | public | auth limiter |
+| POST | `/api/auth/refresh` | cookie | auth limiter |
+| POST | `/api/auth/logout` | cookie | auth limiter |
+| GET | `/api/me` | any | |
+| PUT | `/api/me/university` | student | slow (AI) when the major is new |
+| GET | `/api/me/university/sources` | student | poll limiter |
+| POST | `/api/me/university/sources` | student | multipart, slow (AI) |
+| PUT | `/api/me/year-of-study` | student | |
+| PATCH | `/api/me/profile` | student | |
+| GET | `/api/me/documents` | student | poll limiter |
+| POST | `/api/me/documents` | student | multipart, slow (AI), replaces records |
+| POST | `/api/me/onboarding/complete` | student | |
+| GET | `/api/me/academic-summary` | student | |
+| GET | `/api/me/academic-records` | student | |
+| GET | `/api/me/courses` | student | |
+| GET | `/api/courses/:courseId` | any | |
+| GET | `/api/me/study-plan` | student | |
+| POST | `/api/me/study-plan/generate` | student | AI limiter |
+| PATCH | `/api/me/study-plan/courses/:planCourseId` | student | |
+| POST | `/api/me/what-if` | student | AI limiter |
+| POST | `/api/me/advisor/chat` (SSE) | student | AI limiter |
+| GET | `/api/me/recommendations` | student | may call the AI |
+| POST | `/api/resources/search` | student | AI limiter |
+| POST | `/api/quizzes` | student | AI limiter |
+| GET | `/api/admin/stats` | admin | |
+| GET / POST | `/api/admin/universities` | admin | |
+| GET / PATCH / DELETE | `/api/admin/universities/:universityId` | admin | |
+| GET / POST | `/api/admin/universities/:universityId/majors` | admin | |
+| PATCH / DELETE | `/api/admin/majors/:majorId` | admin | |
+| GET / POST | `/api/admin/courses` | admin | |
+| PATCH / DELETE | `/api/admin/courses/:courseId` | admin | |
+| GET | `/api/admin/students` | admin | |
+| GET | `/api/admin/students/:studentId` | admin | |
 
-### Not included yet (no screen needs them today)
+### Not implemented yet
 
-- A transcript extraction review step (edit or confirm extracted records before they're saved), with routes like `GET /api/me/documents/:id/extraction` and `POST /api/me/academic-records` (bulk). Add them when the review screen is built.
+- A transcript extraction review step (edit or confirm extracted records before they're saved), with routes like `GET /api/me/documents/:id/extraction` and `POST /api/me/academic-records` (bulk).
 - Admin management of learning resources and catalog sources (`/api/admin/learning-resources`, `POST /api/admin/sources/:id/retry`).
-- An AI-generated text for the Overview "advisor insight" card. It's hardcoded today, and could later be one more field on `/api/me/academic-summary`.
+- An AI-generated text for the Overview "advisor insight" card. It could later be one more field on `/api/me/academic-summary`.

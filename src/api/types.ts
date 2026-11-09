@@ -133,7 +133,8 @@ export type CatalogSummaryDto = {
 
 export type UniversitySelectionDto = {
   university: UniversityDto
-  major: MajorDto
+  /** Typed as nullable by the backend; set in practice. */
+  major: MajorDto | null
   catalog: CatalogSummaryDto
   replaced: boolean
 }
@@ -142,7 +143,7 @@ export type UniversitySourcesUploadDto = Omit<UniversitySelectionDto, "replaced"
 
 export type UniversitySourceDto = {
   id: string
-  title: string
+  title: string | null
   sourceType: SourceType
   status: ProcessingStatus
   errorMessage: string | null
@@ -168,8 +169,8 @@ export type StudentDocumentDto = {
 export type AcademicSummaryDto = {
   student: {
     name: string
-    university: UniversitySummaryDto
-    major: MajorDto
+    university: UniversitySummaryDto | null
+    major: MajorDto | null
     yearOfStudy: YearOfStudy | null
   }
   gpa: { cumulative: number | null; changeSinceLastYear: number | null }
@@ -256,7 +257,7 @@ export type RecommendationsDto = {
   difficult: {
     course: CourseSummaryDto
     why: string
-    expectedGrade: LetterGrade | null
+    expectedGrade: LetterGrade
     resources: LearningResourceDto[]
   }[]
 }
@@ -296,8 +297,8 @@ export type AdminMajorDto = MajorDto & { courseCount: number; studentCount: numb
 
 export type AdminSourceDto = {
   id: string
-  title: string
-  url: string | null
+  title: string | null
+  url: string
   sourceType: SourceType
   status: ProcessingStatus
   errorMessage: string | null
