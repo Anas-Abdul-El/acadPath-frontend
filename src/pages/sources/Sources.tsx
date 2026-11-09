@@ -69,7 +69,7 @@ export function SourcesPage() {
               )}
             </Subsection>
 
-            <Subsection title="Courses you're finding difficult" description="Current courses where your expected grade is B+ or lower.">
+            <Subsection title="Courses you're finding difficult" description="Current courses where your expected grade is C+ or lower.">
               {difficult.length ? (
                 difficult.map((focus) => <FocusCourseGroup key={focus.course.id} focus={focus} onOpen={setOpen} />)
               ) : (
