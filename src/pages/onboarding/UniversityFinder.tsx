@@ -1,18 +1,29 @@
 import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, Loader2, RotateCcw } from "lucide-react";
-import { useForm, useWatch } from "react-hook-form";
+import {
+  Controller,
+  useForm,
+  useWatch,
+  type ControllerRenderProps,
+} from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 
 import { applyFieldErrors, errorMessage } from "@/api/errors";
+import { findCountry, useCountries } from "@/api/directory";
 import { useCurrentUser, useSelectUniversity } from "@/api/me";
 import type { UniversitySelectionDto } from "@/api/types";
 import { FormField } from "@/components/shared/form-field";
 import { CatalogFoundPanel } from "@/components/onboarding/university/catalog-found-panel";
+import {
+  CityField,
+  CountryField,
+  MajorField,
+  UniversityNameField,
+} from "@/components/onboarding/university/directory-fields";
 import { OnboardingPageHeader } from "@/components/onboarding/onboarding-page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ROUTES } from "@/lib/routes";
 import {
   universityStepSchema,
@@ -27,6 +38,7 @@ type CheckState =
   | { status: "error"; message: string };
 
 const FIELDS = ["name", "country", "city", "major"] as const;
+type FieldName = (typeof FIELDS)[number];
 
 export function UniversityPage() {
   const navigate = useNavigate();
@@ -36,10 +48,11 @@ export function UniversityPage() {
   const [check, setCheck] = useState<CheckState>({ status: "idle" });
 
   const {
-    register,
     handleSubmit,
     control,
     setError,
+    setValue,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm<UniversityStepValues>({
     resolver: zodResolver(universityStepSchema),
@@ -74,6 +87,28 @@ export function UniversityPage() {
   };
 
   const universityName = useWatch({ control, name: "name" }).trim();
+  const countryName = useWatch({ control, name: "country" });
+  const countries = useCountries();
+  const country = findCountry(countries.data, countryName);
+
+  /** Sets a field from a picked suggestion, as if the student had typed it. */
+  const setField = (name: FieldName, value: string) => {
+    setValue(name, value, { shouldDirty: true, shouldValidate: true });
+    resetCheck();
+  };
+
+  const fieldBinding = (
+    field: ControllerRenderProps<UniversityStepValues, FieldName>,
+  ) => ({
+    name: field.name,
+    value: field.value,
+    onValueChange: (value: string) => {
+      field.onChange(value);
+      resetCheck();
+    },
+    onBlur: field.onBlur,
+    inputRef: field.ref,
+  });
 
   return (
     <>
@@ -94,63 +129,92 @@ export function UniversityPage() {
             <fieldset disabled={isSubmitting} className="space-y-5">
               <legend className="sr-only">University details</legend>
 
-              <FormField
-                label="University name"
-                description="Use the official name as it appears on your transcript."
-                error={errors.name?.message}
-              >
-                {(control) => (
-                  <Input
-                    {...control}
-                    {...register("name", { onChange: resetCheck })}
-                    autoComplete="organization"
-                    placeholder="e.g. University of Jordan"
-                    className="h-10"
-                  />
+              <Controller
+                control={control}
+                name="country"
+                render={({ field }) => (
+                  <FormField
+                    label="Country"
+                    description="Start here — we'll suggest universities and cities in it."
+                    error={errors.country?.message}
+                  >
+                    {(aria) => (
+                      <CountryField
+                        {...aria}
+                        {...fieldBinding(field)}
+                        onSelectCountry={(selected) => {
+                          // A city picked for another country no longer applies.
+                          if (selected.code !== country?.code && getValues("city"))
+                            setValue("city", "");
+                          setField("country", selected.name);
+                        }}
+                      />
+                    )}
+                  </FormField>
                 )}
-              </FormField>
+              />
+
+              <Controller
+                control={control}
+                name="name"
+                render={({ field }) => (
+                  <FormField
+                    label="University name"
+                    description="Use the official name as it appears on your transcript."
+                    error={errors.name?.message}
+                  >
+                    {(aria) => (
+                      <UniversityNameField
+                        {...aria}
+                        {...fieldBinding(field)}
+                        country={country}
+                        onSelectUniversity={(university) => {
+                          setField("name", university.name);
+                          // Searching worldwide: fill in the country the university is in.
+                          const match = countries.data?.find(
+                            (c) => c.code === university.countryCode,
+                          );
+                          if (!country && match) setField("country", match.name);
+                        }}
+                      />
+                    )}
+                  </FormField>
+                )}
+              />
 
               <div className="grid gap-5 sm:grid-cols-2">
-                <FormField label="Country" error={errors.country?.message}>
-                  {(control) => (
-                    <Input
-                      {...control}
-                      {...register("country", { onChange: resetCheck })}
-                      autoComplete="country-name"
-                      placeholder="e.g. Jordan"
-                      className="h-10"
-                    />
+                <Controller
+                  control={control}
+                  name="city"
+                  render={({ field }) => (
+                    <FormField label="City" error={errors.city?.message}>
+                      {(aria) => (
+                        <CityField
+                          {...aria}
+                          {...fieldBinding(field)}
+                          country={country}
+                        />
+                      )}
+                    </FormField>
                   )}
-                </FormField>
+                />
 
-                <FormField label="City" error={errors.city?.message}>
-                  {(control) => (
-                    <Input
-                      {...control}
-                      {...register("city", { onChange: resetCheck })}
-                      autoComplete="address-level2"
-                      placeholder="e.g. Amman"
-                      className="h-10"
-                    />
+                <Controller
+                  control={control}
+                  name="major"
+                  render={({ field }) => (
+                    <FormField
+                      label="Major"
+                      description="Your declared or intended major."
+                      error={errors.major?.message}
+                    >
+                      {(aria) => (
+                        <MajorField {...aria} {...fieldBinding(field)} />
+                      )}
+                    </FormField>
                   )}
-                </FormField>
+                />
               </div>
-
-              <FormField
-                label="Major"
-                description="Your declared or intended major."
-                error={errors.major?.message}
-              >
-                {(control) => (
-                  <Input
-                    {...control}
-                    {...register("major", { onChange: resetCheck })}
-                    autoComplete="off"
-                    placeholder="e.g. Computer Science"
-                    className="h-10"
-                  />
-                )}
-              </FormField>
             </fieldset>
 
             {check.status !== "available" ? (
