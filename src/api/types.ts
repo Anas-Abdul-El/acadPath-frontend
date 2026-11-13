@@ -164,6 +164,28 @@ export type StudentDocumentDto = {
   createdAt: string
 }
 
+// ── Student portal (remote browser) ────────────────────────────────────────
+
+/** The student's remote portal browser: where it is and whether the transcript is on screen. */
+export type PortalStatusDto = {
+  running: boolean
+  url: string | null
+  title: string | null
+  loggedIn: boolean
+  onTranscript: boolean
+  score: number
+  threshold: number
+  reasons: string[]
+  captured: { url: string; title: string; capturedAt: string; length: number } | null
+}
+
+/** POST /me/portal: the session plus a single-use ticket for its WebSocket. */
+export type PortalSessionDto = {
+  status: PortalStatusDto
+  ticket: string
+  socketPath: string
+}
+
 // ── Student academics ────────────────────────────────────────────────────────
 
 export type AcademicSummaryDto = {
