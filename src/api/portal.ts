@@ -23,9 +23,16 @@ export async function stopPortalSession(): Promise<void> {
   await api.delete("/me/portal")
 }
 
-/** The WebSocket URL for a session: same host as the API, ws(s) instead of http(s). */
+/**
+ * Where the portal WebSocket connects. Defaults to the API's host. Set VITE_SOCKET_URL when
+ * the API is reached through a proxy that can't carry WebSockets (Vercel's /api rewrite):
+ * it's the backend's own origin, e.g. https://acadpath-backend.onrender.com.
+ */
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || API_URL
+
+/** The WebSocket URL for a session: the socket host, ws(s) instead of http(s). */
 export function portalSocketUrl({ socketPath, ticket }: Pick<PortalSessionDto, "socketPath" | "ticket">): string {
-  const url = new URL(socketPath, new URL(API_URL, window.location.href))
+  const url = new URL(socketPath, new URL(SOCKET_URL, window.location.href))
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   url.searchParams.set("ticket", ticket)
   return url.toString()
