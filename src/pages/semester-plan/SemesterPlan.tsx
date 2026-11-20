@@ -260,7 +260,7 @@ function PlanContent({ records, plan, generateButton }: PlanContentProps) {
           </div>
         </section>
       ) : (
-        <NoPlanCallout generateButton={generateButton} />
+        <NoPlanCallout />
       )}
 
       {plan && (plan.assumptions.length > 0 || plan.notes.length > 0) ? (
@@ -386,11 +386,7 @@ function PlanContent({ records, plan, generateButton }: PlanContentProps) {
   );
 }
 
-function NoPlanCallout({
-  generateButton,
-}: {
-  generateButton: ReactNode;
-}) {
+function NoPlanCallout({ generateButton }: { generateButton?: ReactNode }) {
   return (
     <section
       aria-labelledby="no-plan-title"
